@@ -1,0 +1,19 @@
+[package]
+name = "athena-term"
+authors.workspace = true
+description.workspace = true
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+athena-core = { path = "../athena-core" }
+
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+
+crossterm = { workspace = true }
+
+tokio = { workspace = true }
+futures = { workspace = true }
+ropey.workspace = true

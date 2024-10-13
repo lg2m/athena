@@ -1,0 +1,11 @@
+[package]
+name = "athena-core"
+authors.workspace = true
+description.workspace = true
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ropey = { workspace = true }
+unicode-segmentation = { workspace = true }
+unicode-width = { workspace = true }

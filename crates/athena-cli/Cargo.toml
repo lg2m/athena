@@ -1,0 +1,17 @@
+[package]
+name = "athena-cli"
+authors.workspace = true
+description.workspace = true
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "ath"
+path = "src/main.rs"
+
+[dependencies]
+athena-term = { path = "../athena-term" }
+
+anyhow = { workspace = true }
+
+tokio = { workspace = true }
