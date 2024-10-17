@@ -1,6 +1,6 @@
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event, KeyCode},
+    event::{self, Event, KeyCode, KeyModifiers},
     terminal::{
         disable_raw_mode, enable_raw_mode, Clear, ClearType, EnterAlternateScreen,
         LeaveAlternateScreen,
@@ -134,6 +134,62 @@ impl Editor {
                 state.update_mode(mode);
                 self.event_sender.send(AppEvent::ModeChanged(mode)).await?;
             }
+
+            Command::Append => {
+                state.append();
+                let pos = state.cursor.index;
+                let coords = coords_at_pos(&state.buffer.slice(..), pos);
+                self.event_sender
+                    .send(AppEvent::CursorMoved(coords.0, coords.1))
+                    .await?;
+                self.event_sender
+                    .send(AppEvent::ModeChanged(Mode::Insert))
+                    .await?;
+            }
+            Command::AppendBelow => {
+                state.insert_newline_below();
+                let pos = state.cursor.index;
+                let coords = coords_at_pos(&state.buffer.slice(..), pos);
+                self.event_sender
+                    .send(AppEvent::CursorMoved(coords.0, coords.1))
+                    .await?;
+                self.event_sender
+                    .send(AppEvent::ModeChanged(Mode::Insert))
+                    .await?;
+            }
+            Command::AppendAbove => {
+                state.insert_newline_above();
+                let pos = state.cursor.index;
+                let coords = coords_at_pos(&state.buffer.slice(..), pos);
+                self.event_sender
+                    .send(AppEvent::CursorMoved(coords.0, coords.1))
+                    .await?;
+                self.event_sender
+                    .send(AppEvent::ModeChanged(Mode::Insert))
+                    .await?;
+            }
+            Command::AppendEnd => {
+                state.insert_end_of_line();
+                let pos = state.cursor.index;
+                let coords = coords_at_pos(&state.buffer.slice(..), pos);
+                self.event_sender
+                    .send(AppEvent::CursorMoved(coords.0, coords.1))
+                    .await?;
+                self.event_sender
+                    .send(AppEvent::ModeChanged(Mode::Insert))
+                    .await?;
+            }
+            Command::AppendStart => {
+                state.insert_start_of_line();
+                let pos = state.cursor.index;
+                let coords = coords_at_pos(&state.buffer.slice(..), pos);
+                self.event_sender
+                    .send(AppEvent::CursorMoved(coords.0, coords.1))
+                    .await?;
+                self.event_sender
+                    .send(AppEvent::ModeChanged(Mode::Insert))
+                    .await?;
+            }
             _ => {}
         }
         Ok(())
@@ -162,8 +218,11 @@ pub async fn run_editor() -> Result<()> {
     // revert cursor
     stdout().write("\x1B[2 q".as_bytes())?;
 
+    stdout()
+        .queue(Clear(ClearType::All))?
+        .queue(LeaveAlternateScreen)?;
+
     disable_raw_mode()?;
-    stdout().queue(LeaveAlternateScreen)?;
 
     Ok(())
 }
@@ -173,21 +232,29 @@ async fn handle_user_input(sender: Sender<Command>, state: Arc<RwLock<State>>) {
         if let Event::Key(key_event) = event::read().unwrap() {
             let mode = state.read().await.mode;
             let command = match mode {
-                Mode::Normal => match key_event.code {
-                    KeyCode::Char('q') => Some(Command::Quit),
-                    KeyCode::Char('i') => Some(Command::UpdateMode(Mode::Insert)),
-                    KeyCode::Char('h') | KeyCode::Left => Some(Command::MoveCursor(
-                        Direction::Backward,
-                        Granularity::Character,
-                    )),
-                    KeyCode::Char('l') | KeyCode::Right => Some(Command::MoveCursor(
-                        Direction::Forward,
-                        Granularity::Character,
-                    )),
-                    KeyCode::Char('k') | KeyCode::Up => {
+                Mode::Normal => match (key_event.modifiers, key_event.code) {
+                    //// MISC
+                    (KeyModifiers::NONE, KeyCode::Char('q')) => Some(Command::Quit),
+                    //// INSERTIONS
+                    (KeyModifiers::NONE, KeyCode::Char('i')) => {
+                        Some(Command::UpdateMode(Mode::Insert))
+                    }
+                    (KeyModifiers::SHIFT, KeyCode::Char('I')) => Some(Command::AppendStart),
+                    (KeyModifiers::NONE, KeyCode::Char('a')) => Some(Command::Append),
+                    (KeyModifiers::SHIFT, KeyCode::Char('A')) => Some(Command::AppendEnd),
+                    (KeyModifiers::NONE, KeyCode::Char('o')) => Some(Command::AppendBelow),
+                    (KeyModifiers::SHIFT, KeyCode::Char('O')) => Some(Command::AppendAbove),
+                    //// MOVEMENTS
+                    (KeyModifiers::NONE, KeyCode::Char('h') | KeyCode::Left) => Some(
+                        Command::MoveCursor(Direction::Backward, Granularity::Character),
+                    ),
+                    (KeyModifiers::NONE, KeyCode::Char('l') | KeyCode::Right) => Some(
+                        Command::MoveCursor(Direction::Forward, Granularity::Character),
+                    ),
+                    (KeyModifiers::NONE, KeyCode::Char('k') | KeyCode::Up) => {
                         Some(Command::MoveCursor(Direction::Backward, Granularity::Line))
                     }
-                    KeyCode::Char('j') | KeyCode::Down => {
+                    (KeyModifiers::NONE, KeyCode::Char('j') | KeyCode::Down) => {
                         Some(Command::MoveCursor(Direction::Forward, Granularity::Line))
                     }
                     _ => None,

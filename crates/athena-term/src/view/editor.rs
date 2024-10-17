@@ -37,6 +37,10 @@ impl Editor {
 
         let mut previous_lengths = Vec::with_capacity(new_line_count);
 
+        if self.is_dirty() {
+            stdout.queue(cursor::Hide)?;
+        }
+
         for (i, line) in visible_lines.enumerate() {
             let line_str = line.as_str().unwrap_or_default();
             let current_length = line_str.len();
@@ -47,15 +51,13 @@ impl Editor {
             };
 
             stdout
-                .queue(cursor::Hide)?
                 .queue(cursor::MoveTo(0, i as u16))?
                 .queue(Clear(ClearType::CurrentLine))?
                 .queue(SetForegroundColor(Color::Red))?
                 .queue(Print(format!("{:4}", i + 1)))?
                 .queue(SetForegroundColor(Color::Reset))?
                 .queue(cursor::MoveTo(5, i as u16))?
-                .queue(Print(line_str))?
-                .queue(cursor::Show)?;
+                .queue(Print(line_str))?;
 
             // Clear the part of the line that exceeds the current line length
             if clear_after > current_length {
@@ -74,10 +76,8 @@ impl Editor {
         if new_line_count < self.rendered_lines {
             for i in new_line_count..self.rendered_lines {
                 stdout
-                    .queue(cursor::Hide)?
                     .queue(cursor::MoveTo(0, i as u16))?
-                    .queue(Clear(ClearType::CurrentLine))?
-                    .queue(cursor::Show)?;
+                    .queue(Clear(ClearType::CurrentLine))?;
             }
         }
 
@@ -99,11 +99,11 @@ impl Editor {
         // Update cursor position only if it has changed
         let pos = state.cursor.index;
         let coords = coords_at_pos(&state.buffer.slice(..), pos);
-        if coords != self.previous_cursor_pos {
+        self.previous_cursor_pos = coords;
+        if coords != self.previous_cursor_pos || self.is_dirty() {
             stdout
                 .queue(cursor::MoveTo((coords.1 + 5) as u16, coords.0 as u16))?
                 .queue(cursor::Show)?;
-            self.previous_cursor_pos = coords;
         }
 
         Ok(())

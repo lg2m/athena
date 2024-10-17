@@ -1,6 +1,9 @@
 use ropey::{Rope, RopeSlice};
 
-use crate::graphemes::GraphemeOperations;
+use crate::{
+    cursor::{Cursor, Selection},
+    graphemes::GraphemeOperations,
+};
 
 #[derive(Debug, Eq, PartialEq, Hash)]
 pub enum AppEvent {
@@ -11,15 +14,15 @@ pub enum AppEvent {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum Mode {
-    Normal,
-    Insert,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Direction {
     Forward,
     Backward,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum Mode {
+    Normal,
+    Insert,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -44,24 +47,102 @@ impl CursorPosition {
 #[derive(Clone, Debug)]
 pub struct State {
     pub buffer: Rope,
-    pub cursor: CursorPosition,
+    pub cursor: Cursor,
+    pub selection: Selection,
     pub mode: Mode,
 }
 
 impl State {
     pub fn new() -> Self {
         Self {
-            buffer: Rope::new(),
-            cursor: CursorPosition::new(0),
+            buffer: Rope::from_str("Welcome to Athena, a modern terminal text-editor"),
+            cursor: Cursor::new(),
+            selection: Selection::new(),
             mode: Mode::Normal,
+        }
+    }
+
+    /// Append after the cursor position and enter insert mode.
+    pub fn append(&mut self) {
+        if self.mode == Mode::Normal {
+            self.cursor.move_next_grapheme(&self.buffer.slice(..));
+            self.mode = Mode::Insert;
+        }
+    }
+
+    /// Go to the beginning of the current line and enter insert mode.
+    pub fn insert_start_of_line(&mut self) {
+        if self.mode == Mode::Normal {
+            // TODO: implement
+            // self.cursor.move_to_beginning_of_line(&self.buffer);
+            self.cursor.move_prev_line(&self.buffer.slice(..));
+            self.cursor.move_next_line(&self.buffer);
+            self.mode = Mode::Insert;
+        }
+    }
+
+    /// Go to the end of the current line and enter insert mode.
+    pub fn insert_end_of_line(&mut self) {
+        if self.mode == Mode::Normal {
+            self.cursor.move_to_end_of_line(&self.buffer);
+            self.mode = Mode::Insert;
+        }
+    }
+
+    /// Insert a newline below the current line, move cursor, and enter insert mode.
+    pub fn insert_newline_below(&mut self) {
+        if self.mode == Mode::Normal {
+            self.cursor.move_to_end_of_line(&self.buffer);
+            self.buffer.insert_char(self.cursor.index, '\n');
+            let slice = self.buffer.slice(..);
+            self.cursor.index = slice.next_grapheme_boundary(self.cursor.index);
+            self.mode = Mode::Insert;
+        }
+    }
+
+    /// Insert a newline above the current line, move cursor, and enter insert mode.
+    pub fn insert_newline_above(&mut self) {
+        if self.mode == Mode::Normal {
+            self.cursor.move_prev_line(&self.buffer.slice(..));
+            self.buffer.insert_char(self.cursor.index, '\n');
+            let slice = self.buffer.slice(..);
+            self.cursor.index = slice.next_grapheme_boundary(self.cursor.index);
+            self.mode = Mode::Insert;
+        }
+    }
+
+    /// Delete the character before the cursor.
+    pub fn backspace(&mut self) {
+        if self.mode == Mode::Insert && self.cursor.index > 0 {
+            let prev_index = self
+                .buffer
+                .slice(..)
+                .prev_grapheme_boundary(self.cursor.index);
+            self.buffer.remove(prev_index..self.cursor.index);
+            self.cursor.index = prev_index;
+        }
+    }
+
+    /// Move the cursor to the next line.
+    pub fn move_next_line(&mut self) {
+        self.cursor.move_next_line(&self.buffer);
+    }
+
+    /// Delete the selected text.
+    pub fn delete_selection(&mut self) {
+        if self.mode == Mode::Normal && self.selection.is_active() {
+            let start = self.selection.start.min(self.selection.end);
+            let end = self.selection.end.max(self.selection.end);
+            self.buffer.remove(start..end);
+            self.cursor.index = start;
+            self.selection.clear();
         }
     }
 
     pub fn insert_char(&mut self, c: char) {
         if self.mode == Mode::Insert {
             self.buffer.insert_char(self.cursor.index, c);
-            let slice = self.buffer.slice(..);
-            self.cursor.index = slice.next_grapheme_boundary(self.cursor.index);
+            self.cursor.move_next_grapheme(&self.buffer.slice(..));
         }
     }
 
@@ -70,15 +151,6 @@ impl State {
             self.buffer.insert_char(self.cursor.index, '\n');
             let slice = self.buffer.slice(..);
             self.cursor.index = slice.next_grapheme_boundary(self.cursor.index);
-        }
-    }
-
-    pub fn backspace(&mut self) {
-        if self.mode == Mode::Insert && self.cursor.index > 0 {
-            let slice = self.buffer.slice(..);
-            let prev_boundary = slice.prev_grapheme_boundary(self.cursor.index);
-            self.buffer.remove(prev_boundary..self.cursor.index);
-            self.cursor.index = prev_boundary;
         }
     }
 

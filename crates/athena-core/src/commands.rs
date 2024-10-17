@@ -7,10 +7,12 @@ pub enum Command {
     InsertNewLine,
     DeleteChar,
     MoveCursor(Direction, Granularity),
-    MoveCursorLeft,
-    MoveCursorRight,
-    MoveCursorUp,
-    MoveCursorDown,
     SaveFile,
     UpdateMode(Mode),
+    // TODO: figure out how to make this nicer
+    Append,
+    AppendBelow,
+    AppendAbove,
+    AppendEnd,
+    AppendStart,
 }
