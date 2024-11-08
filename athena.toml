@@ -1,0 +1,28 @@
+[editor.gutters]
+layout = ["spacer", "line_numbers", "spacer"]
+
+[editor.gutters.line_numbers]
+relative = true               
+min_width = 3
+
+[editor.status_bar]
+left = ["mode"]
+center = ["file_name"]
+right = ["cursor_position", "line_count", "file_encoding", "file_type"]
+mode.normal = "NOR"
+mode.insert = "INS"
+
+[editor.cursor]
+normal = "block"
+insert = "bar"
+
+[keymap.normal]
+j = "down"
+k = "up"
+h = "left"
+l = "right"
+i = "enter_insert_mode"
+Ctrl-s = "save_document"
+
+[keymap.insert]
+j = { k = "exit_insert_mode" }

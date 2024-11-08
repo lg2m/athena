@@ -9,3 +9,7 @@ edition.workspace = true
 ropey = { workspace = true }
 unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+anyhow = { workspace = true }
+toml = "0.8.19"
+dirs = "5.0.1"

@@ -1,6 +1,7 @@
-use anyhow::Result;
+use std::path::Path;
 
-use athena_term::render::run_editor;
+use anyhow::Result;
+use athena_term::run_editor;
 
 #[tokio::main]
 async fn main() -> Result<()> {

@@ -1,0 +1,10 @@
+[package]
+name = "athena-ui"
+authors.workspace = true
+description.workspace = true
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+crossterm = { workspace = true }

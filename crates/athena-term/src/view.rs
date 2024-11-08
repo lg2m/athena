@@ -1,14 +1,15 @@
 use anyhow::Result;
-use std::io::Stdout;
 
-use athena_core::{state::AppEvent, State};
+use athena_core::{state::EditorEvent, EditorState};
 
-pub mod editor;
+use crate::terminal::Terminal;
+
+pub mod document;
 pub mod status_bar;
 
 pub trait View: Send {
-    fn render(&mut self, stdout: &mut Stdout, state: &State) -> Result<()>;
-    fn handle_event(&mut self, event: &AppEvent, state: &State) -> Result<()>;
+    fn render(&mut self, terminal: &mut Terminal, state: &EditorState) -> Result<()>;
+    fn handle_event(&mut self, event: &EditorEvent, state: &EditorState) -> Result<()>;
     fn is_dirty(&self) -> bool {
         true
     }

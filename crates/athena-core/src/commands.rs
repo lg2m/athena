@@ -1,18 +1,25 @@
-use crate::{state::Mode, Direction, Granularity};
+use crate::{Direction, Granularity, Mode};
 
+// TODO: determine if we separate this into key commands and prompt commands
+// e.g., jkhl, i, a, shift+i, etc. and :save, :quit, etc.
+
+/// Editor commands executed by key presses or explicitly in command prompt.
 #[derive(Debug, PartialEq)]
-pub enum Command {
+pub enum EditorCommand {
     Quit,
     InsertChar(char),
-    InsertNewLine,
-    DeleteChar,
-    MoveCursor(Direction, Granularity),
-    SaveFile,
+    Backspace,
+    Enter,
     UpdateMode(Mode),
-    // TODO: figure out how to make this nicer
     Append,
     AppendBelow,
     AppendAbove,
     AppendEnd,
     AppendStart,
+
+    InsertNewLine,
+    DeleteChar,
+    MoveCursor(Direction, Granularity),
+    SaveFile,
+    // TODO: figure out how to make this nicer
 }

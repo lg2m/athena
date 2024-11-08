@@ -1,28 +1,24 @@
 use ropey::{Rope, RopeSlice};
 
 use crate::{
+    config::Mode,
     cursor::{Cursor, Selection},
     graphemes::GraphemeOperations,
 };
 
+/// Editor events that occur after a user performs an action or triggers \
+/// a command in the terminal.
 #[derive(Debug, Eq, PartialEq, Hash)]
-pub enum AppEvent {
+pub enum EditorEvent {
+    /// Cursor position updated.
     CursorMoved(usize, usize),
+    Char(char),
+    /// Editor mode updated.
     ModeChanged(Mode),
+    /// Text buffer update.
     BufferChanged,
+    /// Terminal / window size change.
     ViewportChanged,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum Direction {
-    Forward,
-    Backward,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum Mode {
-    Normal,
-    Insert,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -32,27 +28,22 @@ pub enum Granularity {
     Line,
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct CursorPosition {
-    pub index: usize,
+/// Direction for movement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum Direction {
+    Forward,
+    Backward,
 }
 
-impl CursorPosition {
-    pub fn new(index: usize) -> Self {
-        Self { index }
-    }
-}
-
-// TODO: rename to editor or app state
 #[derive(Clone, Debug)]
-pub struct State {
+pub struct EditorState {
     pub buffer: Rope,
     pub cursor: Cursor,
     pub selection: Selection,
     pub mode: Mode,
 }
 
-impl State {
+impl EditorState {
     pub fn new() -> Self {
         Self {
             buffer: Rope::from_str("Welcome to Athena, a modern terminal text-editor"),
@@ -82,7 +73,7 @@ impl State {
     }
 
     /// Go to the end of the current line and enter insert mode.
-    pub fn insert_end_of_line(&mut self) {
+    pub fn append_end_of_line(&mut self) {
         if self.mode == Mode::Normal {
             self.cursor.move_to_end_of_line(&self.buffer);
             self.mode = Mode::Insert;
@@ -126,6 +117,16 @@ impl State {
     /// Move the cursor to the next line.
     pub fn move_next_line(&mut self) {
         self.cursor.move_next_line(&self.buffer);
+        if self.mode == Mode::Normal {
+            self.update_selection();
+        }
+    }
+
+    /// Update the selection end as the cursor moves.
+    pub fn update_selection(&mut self) {
+        if self.mode == Mode::Normal {
+            self.selection.end = self.cursor.index;
+        }
     }
 
     /// Delete the selected text.
@@ -154,21 +155,32 @@ impl State {
         }
     }
 
-    pub fn move_pos(&mut self, direction: Direction, granularity: Granularity) {
-        let slice = &self.buffer.slice(..);
-        self.cursor.index = match (direction, granularity) {
+    pub fn move_cursor(&mut self, direction: Direction, granularity: Granularity) {
+        match (direction, granularity) {
             (Direction::Backward, Granularity::Character) => {
-                slice.prev_grapheme_boundary(self.cursor.index)
+                self.cursor.move_prev_grapheme(&self.buffer.slice(..))
             }
             (Direction::Forward, Granularity::Character) => {
-                slice.next_grapheme_boundary(self.cursor.index)
+                self.cursor.move_next_grapheme(&self.buffer.slice(..))
             }
-            (_, Granularity::Line) => move_vertically(&slice, direction, self.cursor.index),
-            _ => self.cursor.index,
-        };
+            (Direction::Backward, Granularity::Word) => {
+                self.cursor.move_prev_word(&self.buffer.slice(..))
+            }
+            (Direction::Forward, Granularity::Word) => {
+                self.cursor.move_next_word(&self.buffer.slice(..))
+            }
+            (Direction::Backward, Granularity::Line) => {
+                self.cursor.move_prev_line(&self.buffer.slice(..))
+            }
+            (Direction::Forward, Granularity::Line) => self.cursor.move_next_line(&self.buffer),
+        }
     }
 
+    /// Updates the editor mode.
     pub fn update_mode(&mut self, mode: Mode) {
+        if mode == Mode::Normal {
+            self.cursor.move_prev_grapheme(&self.buffer.slice(..));
+        }
         self.mode = mode;
     }
 }

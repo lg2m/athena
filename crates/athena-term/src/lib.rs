@@ -1,5 +1,7 @@
 // pub mod event;
-pub mod render;
-pub mod view;
+pub(crate) mod editor;
+// pub mod render;
+pub(crate) mod terminal;
+pub(crate) mod view;
 
-pub use render::Editor;
+pub use editor::run_editor;

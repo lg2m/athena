@@ -17,3 +17,4 @@ crossterm = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }
 ropey.workspace = true
+itertools = "0.13.0"
