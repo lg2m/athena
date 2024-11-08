@@ -8,7 +8,6 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/lg2m/athena/internal/editor"
-	"github.com/lg2m/athena/internal/editor/buffer"
 	"github.com/lg2m/athena/internal/editor/state"
 	"github.com/lg2m/athena/internal/util"
 	"github.com/rivo/tview"
@@ -18,7 +17,6 @@ import (
 type Option = func(*Athena)
 
 // Athena represents the main UI component of the editor.
-// All fields are immutable after initialization unless protected by mu.
 type Athena struct {
 	app     *tview.Application
 	editor  *editor.Editor
@@ -51,6 +49,7 @@ func NewAthena(opts ...Option) (*Athena, error) {
 
 	if a.config.filePath != "" {
 		if err := a.LoadFile(a.config.filePath); err != nil {
+			a.showError(err)
 			return nil, err
 		}
 	}
@@ -63,11 +62,14 @@ func (a *Athena) LoadFile(filePath string) error {
 	if err := a.editor.OpenFile(filePath); err != nil {
 		return fmt.Errorf("failed to load file: %w", err)
 	}
+
 	buffer := a.editor.Manager.GetCurrentBuffer()
 	if buffer == nil {
 		return fmt.Errorf("unable to get buffer")
 	}
-	a.refreshContent(buffer)
+
+	a.refreshContent()
+
 	return nil
 }
 
@@ -148,120 +150,139 @@ func (a *Athena) Run() error {
 // handleKeyPress processes keyboard input events.
 // It uses a read lock for operations that don't modify state.
 func (a *Athena) handleKeyPress(event *tcell.EventKey) *tcell.EventKey {
-	a.mu.RLock()
-	buffer := a.editor.Manager.GetCurrentBuffer()
-	if buffer == nil {
-		a.mu.RUnlock()
-		return event
-	}
-	mode := a.editor.GetMode()
-	a.mu.RUnlock()
-
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	switch mode {
+	switch a.editor.GetMode() {
 	case state.Normal:
-		return a.handleNormalMode(event, buffer)
+		return a.handleNormalMode(event)
 	case state.Insert:
-		return a.handleInsertMode(event, buffer)
+		return a.handleInsertMode(event)
 	default:
 		return event
 	}
 }
 
-func (a *Athena) handleNormalMode(event *tcell.EventKey, b *buffer.Buffer) *tcell.EventKey {
+func (a *Athena) handleNormalMode(event *tcell.EventKey) *tcell.EventKey {
 	switch event.Key() {
 	case tcell.KeyCtrlC:
+		if err := a.editor.CloseCurrentBuffer(); err != nil {
+			a.showError(err)
+			return nil
+		}
 		a.app.Stop()
+	case tcell.KeyCtrlS:
+		if err := a.editor.SaveCurrentBuffer(); err != nil {
+			a.showError(err)
+		}
 	case tcell.KeyLeft:
-		b.MoveCursor(-1)
-		a.refreshContent(b)
+		if err := a.editor.MoveCursorHorizontal(-1); err != nil {
+			a.showError(err)
+		}
 	case tcell.KeyRight:
-		b.MoveCursor(1)
-		a.refreshContent(b)
+		if err := a.editor.MoveCursorHorizontal(1); err != nil {
+			a.showError(err)
+		}
 	case tcell.KeyUp:
-		a.moveCursorUp(b)
-		a.refreshContent(b)
+		if err := a.editor.MoveCursorVertical(-1); err != nil {
+			a.showError(err)
+		}
 	case tcell.KeyDown:
-		a.moveCursorDown(b)
-		a.refreshContent(b)
+		if err := a.editor.MoveCursorVertical(1); err != nil {
+			a.showError(err)
+		}
 	case tcell.KeyRune:
 		switch event.Rune() {
 		case 'i':
 			a.editor.SetMode(state.Insert)
-			a.refreshContent(b)
+			a.showError(fmt.Errorf("Testing"))
 		case 'h':
-			b.MoveCursor(-1)
-			a.refreshContent(b)
+			if err := a.editor.MoveCursorHorizontal(-1); err != nil {
+				a.showError(err)
+			}
 		case 'l':
-			b.MoveCursor(1)
-			a.refreshContent(b)
+			if err := a.editor.MoveCursorHorizontal(1); err != nil {
+				a.showError(err)
+			}
 		case 'k':
-			a.moveCursorUp(b)
-			a.refreshContent(b)
+			if err := a.editor.MoveCursorVertical(-1); err != nil {
+				a.showError(err)
+			}
 		case 'j':
-			a.moveCursorDown(b)
-			a.refreshContent(b)
+			if err := a.editor.MoveCursorVertical(1); err != nil {
+				a.showError(err)
+			}
 		}
 	}
+	a.refreshContent()
 	return nil
 }
 
-func (a *Athena) handleInsertMode(event *tcell.EventKey, b *buffer.Buffer) *tcell.EventKey {
+func (a *Athena) handleInsertMode(event *tcell.EventKey) *tcell.EventKey {
 	switch event.Key() {
-	case tcell.KeyLeft:
-		b.MoveCursor(-1)
-		a.refreshContent(b)
-	case tcell.KeyRight:
-		b.MoveCursor(1)
-		a.refreshContent(b)
-	case tcell.KeyUp:
-		a.moveCursorUp(b)
-		a.refreshContent(b)
-	case tcell.KeyDown:
-		a.moveCursorDown(b)
-		a.refreshContent(b)
 	case tcell.KeyEscape:
 		a.editor.SetMode(state.Normal)
-		a.refreshContent(b)
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
-		b.MoveCursor(-1)
-		_ = b.Delete(1)
-		a.refreshContent(b)
+		if err := a.editor.DeleteText(-1); err != nil {
+			a.showError(err)
+		}
+	case tcell.KeyDelete:
+		if err := a.editor.DeleteText(1); err != nil {
+			a.showError(err)
+		}
 	case tcell.KeyEnter:
-		_ = b.Insert("\n")
-		a.refreshContent(b)
+		if err := a.editor.InsertText("\n"); err != nil {
+			a.showError(err)
+		}
+	case tcell.KeyLeft:
+		if err := a.editor.MoveCursorHorizontal(-1); err != nil {
+			a.showError(err)
+		}
+	case tcell.KeyRight:
+		if err := a.editor.MoveCursorHorizontal(1); err != nil {
+			a.showError(err)
+		}
+	case tcell.KeyUp:
+		if err := a.editor.MoveCursorVertical(-1); err != nil {
+			a.showError(err)
+		}
+	case tcell.KeyDown:
+		if err := a.editor.MoveCursorVertical(1); err != nil {
+			a.showError(err)
+		}
 	case tcell.KeyRune:
-		if event.Rune() != 0 {
-			_ = b.Insert(string(event.Rune()))
-			a.refreshContent(b)
+		if err := a.editor.InsertText(string(event.Rune())); err != nil {
+			a.showError(err)
 		}
 	}
+	a.refreshContent()
 	return nil
 }
 
 // refreshContent updates the display components with the current buffer state.
 // It uses a string builder for efficient string concatenation.
-func (a *Athena) refreshContent(b *buffer.Buffer) {
-	line, col := b.GetCursorPosition()
-	lines := b.GetLines()
-	total := len(lines)
-
-	if line >= total {
-		line = total - 1
+func (a *Athena) refreshContent() {
+	b := a.editor.Manager.GetCurrentBuffer()
+	if b == nil {
+		return
 	}
 
-	if col > len([]rune(lines[line])) {
-		col = len([]rune(lines[line]))
+	currLine, currCol, err := a.editor.GetCurrentPosition()
+	if err != nil {
+		return
+	}
+
+	total, err := b.LineCount()
+	if err != nil {
+		return
 	}
 
 	// Update gutters (line numbers)
 	var gutterBuilder strings.Builder
 	gutterBuilder.Grow(total * (a.config.gutterWidth + 1)) // pre-allocate space
 
-	for i := range lines {
-		if i == line {
+	for i := range total {
+		if i == currLine {
 			fmt.Fprintf(&gutterBuilder, "[white]%*d\n", a.config.gutterWidth-1, i+1)
 		} else {
 			fmt.Fprintf(&gutterBuilder, "[purple]%*d\n", a.config.gutterWidth-1, i+1)
@@ -277,34 +298,45 @@ func (a *Athena) refreshContent(b *buffer.Buffer) {
 	a.display.gutters.SetText(gutterBuilder.String())
 
 	// Update status bar
-	status := fmt.Sprintf(" %d%% %d:%d %d ",
-		util.CalcProgress(total, line+1),
-		line+1, col+1, total)
+	mode := a.editor.GetMode().String()
+
+	status := fmt.Sprintf(" %s | %d%% %d:%d %d ",
+		mode,
+		util.CalcProgress(total, currLine+1),
+		currLine+1, currCol+1,
+		total)
+
 	a.display.statusBar.SetText(status)
 
 	// Update document with cursor
 	var documentBuilder strings.Builder
 	documentBuilder.Grow(total * 80) // Estimate average line length
 
-	for i, l := range lines {
+	for i := range total {
 		if i > 0 {
 			documentBuilder.WriteByte('\n')
 		}
 
-		if i == line {
+		l, err := b.GetLine(i)
+		if err != nil {
+			a.showError(err)
+			continue
+		}
+
+		if i == currLine {
 			runes := []rune(l)
-			if col > len(runes) {
-				col = len(runes)
+			if currCol > len(runes) {
+				currCol = len(runes)
 			}
-			if col == len(runes) {
+			if currCol == len(runes) {
 				documentBuilder.WriteString(string(runes))
 				documentBuilder.WriteString("[::r] [-:-:-]")
 			} else {
-				documentBuilder.WriteString(string(runes[:col]))
+				documentBuilder.WriteString(string(runes[:currCol]))
 				documentBuilder.WriteString("[::r]")
-				documentBuilder.WriteRune(runes[col])
+				documentBuilder.WriteRune(runes[currCol])
 				documentBuilder.WriteString("[-:-:-]")
-				documentBuilder.WriteString(string(runes[col+1:]))
+				documentBuilder.WriteString(string(runes[currCol+1:]))
 			}
 		} else {
 			documentBuilder.WriteString(l)
@@ -314,54 +346,8 @@ func (a *Athena) refreshContent(b *buffer.Buffer) {
 	a.display.document.SetText(documentBuilder.String())
 }
 
-// moveCursorUp moves the cursor up one line, maintaining column position if possible.
-func (a *Athena) moveCursorUp(b *buffer.Buffer) {
-	line, col := b.GetCursorPosition()
-	if line <= 0 {
-		return
+func (a *Athena) showError(err error) {
+	if err != nil {
+		a.display.statusBar.SetText(fmt.Sprintf(" [red]Error: %v[-:-:-]", err))
 	}
-
-	lines := b.GetLines()
-	if line-1 >= len(lines) {
-		return
-	}
-
-	prevLineLen := len([]rune(lines[line-1]))
-	newCol := min(col, prevLineLen)
-
-	// calc new cursor index
-	curr := b.GetCursorIndex()
-	currLineLen := len([]rune(lines[line]))
-	newPos := curr - currLineLen - 1 - (prevLineLen - newCol)
-
-	if newPos < 0 {
-		newPos = 0 // Clamp to beginning
-	}
-
-	b.SetCursor(newPos)
-}
-
-// moveCursorDown moves the cursor down one line, maintaining column position if possible.
-func (a *Athena) moveCursorDown(b *buffer.Buffer) {
-	line, col := b.GetCursorPosition()
-	lines := b.GetLines()
-	if line >= len(lines)-1 {
-		return
-	}
-
-	// Move to next line
-	nextLineLen := len([]rune(lines[line+1]))
-	newCol := min(col, nextLineLen)
-
-	// Calculate new cursor position
-	curr := b.GetCursorIndex()
-	currLineLen := len([]rune(lines[line]))
-	newPos := curr + currLineLen + 1 + newCol
-
-	bufferLen := len([]rune(b.GetText()))
-	if newPos > bufferLen {
-		newPos = bufferLen // Clamp to end
-	}
-
-	b.SetCursor(newPos)
 }
