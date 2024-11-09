@@ -3,41 +3,63 @@ package buffer
 import (
 	"errors"
 	"io"
-	"strings"
+	"os"
 	"sync"
 	"time"
+
+	"github.com/lg2m/athena/internal/rope"
+	"github.com/lg2m/athena/internal/util"
 )
 
 var (
-	ErrInvalidRange    = errors.New("invalid range")
-	ErrOutOfBounds     = errors.New("position out of bounds")
-	ErrBufferEmpty     = errors.New("buffer is empty")
-	ErrInvalidLineCol  = errors.New("invalid line or column")
-	ErrInvalidPosition = errors.New("invalid position")
+	ErrInvalidRange     = errors.New("invalid range")
+	ErrInvalidPosition  = errors.New("invalid position")
+	ErrInvalidLineCol   = errors.New("invalid line/column")
+	ErrInvalidSelection = errors.New("invalid selection")
 )
+
+type Selection struct {
+	Start int
+	End   int
+}
 
 // Buffer represents a single text buffer (document).
 type Buffer struct {
-	manager       *ChunkManager
-	cursor        *Cursor
+	document      *rope.Rope
+	selection     Selection
 	name          string
 	lastSavePoint time.Time
+	file          *os.File
+	size          int64
+	lineCache     []int
 	mu            sync.RWMutex
 }
 
 // NewBuffer creates a new Buffer with optional initial content.
 func NewBuffer(filePath string) (*Buffer, error) {
-	manager, err := NewChunkManager(filePath)
+	file, err := os.OpenFile(filePath, os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Buffer{
-		manager:       manager,
-		cursor:        &Cursor{Position: 0},
-		name:          filePath,
+	document, err := io.ReadAll(file)
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+
+	b := &Buffer{
+		document:      rope.NewRope(string(document)),
+		selection:     Selection{Start: 0, End: 0},
+		name:          util.GetFileName(filePath, true),
 		lastSavePoint: time.Now(),
-	}, nil
+		file:          file,
+		size:          int64(len(document)),
+	}
+
+	b.updateLineCache()
+
+	return b, nil
 }
 
 // Insert inserts text at the cursor's current position.
@@ -45,20 +67,29 @@ func (b *Buffer) Insert(s string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	chunkID := b.cursor.Position / b.manager.chunkSize
-	chunk, err := b.manager.GetChunk(chunkID)
-	if err != nil {
+	// replace selection with new text
+	if b.selection.Start != b.selection.End {
+		if err := b.document.Delete(b.selection.Start, b.selection.End); err != nil {
+			return err
+		}
+	}
+
+	// insert new text at selection start
+	if err := b.document.Insert(b.selection.Start, s); err != nil {
 		return err
 	}
 
-	// Perform the insertion
-	relativePos := b.cursor.Position % b.manager.chunkSize
-	chunkData := chunk.Read()
-	newData := chunkData[:relativePos] + s + chunkData[relativePos:]
-	chunk.Write(newData)
+	// update selection to new position
+	newEnd := b.selection.Start + rope.CountGraphemes(s)
+	b.selection = Selection{Start: newEnd, End: newEnd}
 
-	// Update cursor
-	b.cursor.Position += len(s)
+	// if err := b.document.Insert(b.cursor.Position, s); err != nil {
+	// 	return err
+	// }
+
+	b.size += int64(len(s))
+	// b.cursor.Position += rope.CountGraphemes(s)
+	b.updateLineCache()
 
 	return nil
 }
@@ -68,352 +99,75 @@ func (b *Buffer) Delete(start, end int) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if start < 0 || end > b.Size() || start > end {
-		return ErrInvalidRange
-	}
-
-	// Get affected chunks
-	startChunk := start / b.manager.chunkSize
-	endChunk := end / b.manager.chunkSize
-
-	// Handle single chunk case
-	if startChunk == endChunk {
-		chunk, err := b.manager.GetChunk(startChunk)
-		if err != nil {
-			return err
-		}
-
-		chunkData := chunk.Read()
-		relStart := start % b.manager.chunkSize
-		relEnd := end % b.manager.chunkSize
-		newData := chunkData[:relStart] + chunkData[relEnd:]
-		chunk.Write(newData)
-
-		// Update cursor if needed
-		if b.cursor.Position > start {
-			b.cursor.Position = start
-		}
-
-		return nil
-	}
-
-	// Handle multi-chunk deletion
-	var newContent strings.Builder
-
-	// First chunk
-	firstChunk, err := b.manager.GetChunk(startChunk)
-	if err != nil {
+	if err := b.document.Delete(start, end); err != nil {
 		return err
 	}
-	firstChunkData := firstChunk.Read()
-	relStart := start % b.manager.chunkSize
-	newContent.WriteString(firstChunkData[:relStart])
 
-	// Last chunk
-	lastChunk, err := b.manager.GetChunk(endChunk)
-	if err != nil && err != io.EOF {
-		return err
+	if b.selection.Start > start {
+		b.selection = Selection{Start: start, End: start}
 	}
-	if err != io.EOF {
-		lastChunkData := lastChunk.Read()
-		relEnd := end % b.manager.chunkSize
-		newContent.WriteString(lastChunkData[relEnd:])
-	}
+	// if b.cursor.Position > start {
+	// 	b.cursor.SetPosition(start)
+	// }
 
-	// Write the combined content to the first chunk
-	firstChunk.Write(newContent.String())
-
-	// Mark intermediate chunks for deletion
-	for chunkID := startChunk + 1; chunkID <= endChunk; chunkID++ {
-		delete(b.manager.chunks, chunkID)
-		b.manager.loadedChunks--
-	}
-
-	// Update cursor if needed
-	if b.cursor.Position > start {
-		b.cursor.Position = start
-	}
+	b.size -= int64(end - start)
+	b.updateLineCache()
 
 	return nil
 }
 
-// MoveCursor moves the cursor by the specified offset.
-func (b *Buffer) MoveCursor(offset int) error {
+// DeleteSelections deletes text in the current selections.
+func (b *Buffer) DeleteSelection() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	newPos := b.cursor.Position + offset
-	return b.SetCursor(newPos)
-}
+	start, end := b.selection.Start, b.selection.End
 
-// MoveCursorToLineCol moves the cursor to a specific line and column
-// It clamps the column to the end of the line if necessary but preserves the desired column.
-func (b *Buffer) MoveCursorToLineCol(line, col int) (int, int, error) {
-	if line < 0 || col < 0 {
-		return 0, 0, ErrInvalidLineCol
+	if err := b.document.Delete(start, end); err != nil {
+		return err
 	}
 
-	currentLine := 0
-	currentCol := 0
-	position := 0
+	b.selection = Selection{Start: start, End: start}
+	b.size -= int64(end - start)
+	b.updateLineCache()
 
-	targetPosition := -1
-	targetCol := col
-
-	for chunkID := 0; ; chunkID++ {
-		chunk, err := b.manager.GetChunk(chunkID)
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return 0, 0, err
-		}
-		chunkData := chunk.Read()
-		for _, r := range chunkData {
-			if currentLine == line {
-				if currentCol == col {
-					targetPosition = position
-					targetCol = currentCol
-					break
-				}
-				if r == '\n' {
-					// EOL reached - clamp to the end of column
-					targetPosition = position
-					targetCol = currentCol
-					break
-				}
-				currentCol++
-			}
-			if r == '\n' {
-				currentLine++
-				currentCol = 0
-			}
-			position++
-		}
-		if targetPosition != -1 {
-			break
-		}
-	}
-	if targetPosition == -1 && currentLine == line {
-		// line exists but might be empty
-		targetPosition = position
-		targetCol = currentCol
-	}
-	if targetPosition != -1 {
-		if err := b.SetCursor(targetPosition); err != nil {
-			return 0, 0, err
-		}
-		return currentLine, targetCol, nil
-	}
-
-	return 0, 0, ErrInvalidLineCol
-}
-
-// PositionToLineCol converts a buffer position to line and column numbers.
-func (b *Buffer) PositionToLineCol(pos int) (int, int, error) {
-	if pos < 0 || pos > b.Size() {
-		return 0, 0, ErrInvalidPosition
-	}
-	line := 0
-	column := 0
-	position := 0
-	for chunkID := 0; ; chunkID++ {
-		chunk, err := b.manager.GetChunk(chunkID)
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return 0, 0, err
-		}
-		chunkData := chunk.Read()
-		for _, r := range chunkData {
-			if position == pos {
-				return line, column, nil
-			}
-			if r == '\n' {
-				line++
-				column = 0
-			} else {
-				column++
-			}
-			position++
-		}
-	}
-	// If pos is at the end of the buffer
-	if position == pos {
-		return line, column, nil
-	}
-	return 0, 0, ErrInvalidPosition
-}
-
-// SetCursor sets the cursor to the specified position.
-func (b *Buffer) SetCursor(pos int) error {
-	if pos < 0 || pos > b.Size() {
-		return ErrOutOfBounds
-	}
-	b.cursor.Position = pos
 	return nil
 }
 
-// GetLine returns the content of a specific line
-func (b *Buffer) GetLine(lineNum int) (string, error) {
-	if lineNum < 0 {
-		return "", ErrInvalidLineCol
-	}
-
-	var line strings.Builder
-	currentLine := 0
-	foundLine := false
-
-	// Iterate through chunks to find the line
-	for chunkID := 0; ; chunkID++ {
-		chunk, err := b.manager.GetChunk(chunkID)
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return "", err
-		}
-
-		chunkData := chunk.Read()
-		for _, r := range chunkData {
-			if currentLine == lineNum {
-				foundLine = true
-				if r == '\n' {
-					return line.String(), nil
-				}
-				line.WriteRune(r)
-			} else if currentLine > lineNum {
-				return line.String(), nil
-			}
-
-			if r == '\n' {
-				currentLine++
-			}
-		}
-	}
-
-	if !foundLine {
-		return "", ErrInvalidLineCol
-	}
-	return line.String(), nil
-}
-
-// GetLines returns a range of lines
-func (b *Buffer) GetLines(start, end int) ([]string, error) {
-	if start < 0 || end < start {
-		return nil, ErrInvalidRange
-	}
-
-	lines := make([]string, 0, end-start+1)
-	var currentLine strings.Builder
-	lineNum := 0
-
-	// Iterate through chunks to collect lines
-	for chunkID := 0; ; chunkID++ {
-		chunk, err := b.manager.GetChunk(chunkID)
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-
-		chunkData := chunk.Read()
-		for _, r := range chunkData {
-			if lineNum >= start && lineNum <= end {
-				if r == '\n' {
-					lines = append(lines, currentLine.String())
-					currentLine.Reset()
-					lineNum++
-					if lineNum > end {
-						return lines, nil
-					}
-				} else {
-					currentLine.WriteRune(r)
-				}
-			} else if lineNum > end {
-				return lines, nil
-			} else if r == '\n' {
-				lineNum++
-			}
-		}
-	}
-
-	if currentLine.Len() > 0 && lineNum <= end {
-		lines = append(lines, currentLine.String())
-	}
-
-	return lines, nil
-}
-
-// GetTextRange retrieves text from start to end graphemes indices (exclusive).
-func (b *Buffer) GetTextRange(start, end int) (string, error) {
+// GetText returns text between start and end positions.
+func (b *Buffer) GetText(start, end int) (string, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-
-	startChunk := start / b.manager.chunkSize
-	endChunk := end / b.manager.chunkSize
-
-	var result strings.Builder
-
-	for chunkID := startChunk; chunkID <= endChunk; chunkID++ {
-		chunk, err := b.manager.GetChunk(chunkID)
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return "", err
-		}
-
-		chunkStart := chunkID * b.manager.chunkSize
-		chunkData := chunk.Read()
-
-		// Calculate relative positions within chunk
-		relativeStart := max(0, start-chunkStart)
-		relativeEnd := min(len(chunkData), end-chunkStart)
-
-		result.WriteString(chunkData[relativeStart:relativeEnd])
-	}
-
-	return result.String(), nil
+	return b.document.GetTextRange(start, end)
 }
 
-// GetCursorPosition returns the cursor's line and column numbers.
-func (b *Buffer) GetCursorPosition() (line, column int) {
-	textBeforeCursor, _ := b.GetTextRange(0, b.cursor.Position)
-	lines := strings.Split(textBeforeCursor, "\n")
-	line = len(lines) - 1
-	column = len([]rune(lines[line]))
-	return
+// GetSelectedText returns the text within the current selections.
+func (b *Buffer) GetSelectedText() (string, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.document.GetTextRange(b.selection.Start, b.selection.End)
 }
 
-// GetCursor returns the cursor's position in the graphemes cluster.
-func (b *Buffer) GetCursor() int {
-	return b.cursor.Position
-}
-
-// Save writes the buffer content to the associated file.
+// Save writes buffer content to disk.
 func (b *Buffer) Save() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	// Save all dirty chunks
-	for _, chunk := range b.manager.chunks {
-		if chunk.Dirty {
-			if err := b.manager.saveChunk(chunk); err != nil {
-				return err
-			}
-		}
+	if err := b.file.Truncate(0); err != nil {
+		return err
+	}
+
+	if _, err := b.file.Seek(0, 0); err != nil {
+		return err
+	}
+
+	_, err := b.file.WriteString(b.document.ToString())
+	if err != nil {
+		return err
 	}
 
 	b.lastSavePoint = time.Now()
 	return nil
-}
-
-// Size returns the total size of the buffer in bytes
-func (b *Buffer) Size() int {
-	return int(b.manager.totalSize)
 }
 
 // Close properly closes the buffer and its resources
@@ -426,38 +180,158 @@ func (b *Buffer) Close() error {
 		return err
 	}
 
-	// Close the file handle
-	if err := b.manager.file.Close(); err != nil {
+	if err := b.file.Close(); err != nil {
 		return err
 	}
-
-	// Clear the chunks map
-	b.manager.chunks = nil
 
 	return nil
 }
 
-// LineCount returns the total number of lines in the buffer
-func (b *Buffer) LineCount() (int, error) {
-	count := 0
-	for chunkID := 0; ; chunkID++ {
-		chunk, err := b.manager.GetChunk(chunkID)
-		if err == io.EOF {
+// CollapseSelectionsToCursor collapses all selections to their end positions.
+func (b *Buffer) CollapseSelectionsToCursor() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	pos := b.selection.End
+	b.selection = Selection{Start: pos, End: pos}
+}
+
+// MoveSelections moves the selections by the specified offset.
+// If `extend` is true, it extends the selection; otherwise, it moves the cursor.
+func (b *Buffer) MoveSelections(offset int, extend bool) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	newPos := b.selection.End + offset
+	newPos = clamp(newPos, 0, b.document.TotalGraphemes())
+	if extend {
+		// extend the selection end
+		b.selection.End = newPos
+	} else {
+		// move both start and end (cursor movement)
+		b.selection = Selection{Start: newPos, End: newPos}
+	}
+
+	return nil
+}
+
+// MoveSelectionToLineCol moves the selection to a specific line and column.
+func (b *Buffer) MoveSelectionToLineCol(line, col int, extend bool) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if line < 0 || col < 0 || line >= len(b.lineCache) {
+		return ErrInvalidLineCol
+	}
+
+	lineStart := b.lineCache[line]
+	var lineEnd int
+	if line+1 < len(b.lineCache) {
+		lineEnd = b.lineCache[line+1] - 1 // -1 to exclude newline
+	} else {
+		lineEnd = b.document.TotalGraphemes()
+	}
+
+	actualCol := col
+	lineLen := lineEnd - lineStart
+	if actualCol > lineLen {
+		actualCol = lineLen
+	}
+
+	targetPos := lineStart + actualCol
+
+	if extend {
+		b.selection.End = targetPos
+	} else {
+		b.selection = Selection{Start: targetPos, End: targetPos}
+	}
+
+	return nil
+}
+
+// Selections returns the current selections.
+func (b *Buffer) Selection() Selection {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.selection
+}
+
+// TotalGraphemes returns the total number of graphemes in the document.
+func (b *Buffer) TotalGraphemes() int {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.document.TotalGraphemes()
+}
+
+// PositionToLineCol converts a buffer position to line and column numbers
+func (b *Buffer) PositionToLineCol(pos int) (int, int, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	if pos < 0 || pos > b.document.TotalGraphemes() {
+		return 0, 0, ErrInvalidPosition
+	}
+
+	// Binary search in lineCache to find the line
+	line := 0
+	for i := len(b.lineCache) - 1; i >= 0; i-- {
+		if pos >= b.lineCache[i] {
+			line = i
 			break
 		}
-		if err != nil {
-			return 0, err
+	}
+
+	column := pos - b.lineCache[line]
+	return line, column, nil
+}
+
+// GetLine returns the content of a specific line
+func (b *Buffer) GetLine(lineNum int) (string, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	if lineNum < 0 || lineNum >= len(b.lineCache) {
+		return "", ErrInvalidLineCol
+	}
+
+	start := b.lineCache[lineNum]
+	var end int
+	if lineNum+1 < len(b.lineCache) {
+		end = b.lineCache[lineNum+1] - 1 // -1 to exclude newline
+	} else {
+		end = b.document.TotalGraphemes()
+	}
+
+	return b.document.GetTextRange(start, end)
+}
+
+// LineCount returns the total number of lines in the buffer
+func (b *Buffer) LineCount() int {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return len(b.lineCache)
+}
+
+// updateLineCache rebuilds the cache of line start positions.
+func (b *Buffer) updateLineCache() {
+	b.lineCache = make([]int, 0, 1000)
+	b.lineCache = append(b.lineCache, 0) // First line always starts at 0
+
+	doc := b.document.ToString()
+	for i, r := range doc {
+		if r == '\n' {
+			b.lineCache = append(b.lineCache, i+1)
 		}
-
-		chunkData := chunk.Read()
-		count += strings.Count(chunkData, "\n")
 	}
+}
 
-	// Add 1 if buffer doesn't end with newline
-	lastChunk, err := b.manager.GetChunk(int(b.manager.totalSize / int64(b.manager.chunkSize)))
-	if err == nil && !strings.HasSuffix(lastChunk.Read(), "\n") {
-		count++
+// clamp clamps a value within a range.
+func clamp(val, min, max int) int {
+	if val < min {
+		return min
 	}
-
-	return count, nil
+	if val > max {
+		return max
+	}
+	return val
 }

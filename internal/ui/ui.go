@@ -30,6 +30,11 @@ type Athena struct {
 		gutterWidth int
 		filePath    string
 	}
+	viewport struct {
+		offset  int // number of lines scrolled from top
+		height  int // visible height of the document view
+		padding int // number of lines to keep visible above/below cursor
+	}
 	mu sync.RWMutex
 }
 
@@ -40,6 +45,7 @@ func NewAthena(opts ...Option) (*Athena, error) {
 		editor: editor.NewEditor(),
 	}
 	a.config.gutterWidth = 6
+	a.viewport.padding = 5
 
 	a.initializeComponents()
 
@@ -63,13 +69,7 @@ func (a *Athena) LoadFile(filePath string) error {
 		return fmt.Errorf("failed to load file: %w", err)
 	}
 
-	buffer := a.editor.Manager.GetCurrentBuffer()
-	if buffer == nil {
-		return fmt.Errorf("unable to get buffer")
-	}
-
 	a.refreshContent()
-
 	return nil
 }
 
@@ -176,40 +176,44 @@ func (a *Athena) handleNormalMode(event *tcell.EventKey) *tcell.EventKey {
 			a.showError(err)
 		}
 	case tcell.KeyLeft:
-		if err := a.editor.MoveCursorHorizontal(-1); err != nil {
+		if err := a.editor.MoveCursorHorizontal(-1, false); err != nil {
 			a.showError(err)
 		}
 	case tcell.KeyRight:
-		if err := a.editor.MoveCursorHorizontal(1); err != nil {
+		if err := a.editor.MoveCursorHorizontal(1, false); err != nil {
 			a.showError(err)
 		}
 	case tcell.KeyUp:
-		if err := a.editor.MoveCursorVertical(-1); err != nil {
+		if err := a.editor.MoveCursorVertical(-1, false); err != nil {
 			a.showError(err)
 		}
 	case tcell.KeyDown:
-		if err := a.editor.MoveCursorVertical(1); err != nil {
+		if err := a.editor.MoveCursorVertical(1, false); err != nil {
 			a.showError(err)
 		}
 	case tcell.KeyRune:
 		switch event.Rune() {
+		case 'd':
+			if err := a.editor.DeleteSelection(); err != nil {
+				a.showError(err)
+			}
 		case 'i':
 			a.editor.SetMode(state.Insert)
 			a.showError(fmt.Errorf("Testing"))
 		case 'h':
-			if err := a.editor.MoveCursorHorizontal(-1); err != nil {
+			if err := a.editor.MoveCursorHorizontal(-1, false); err != nil {
 				a.showError(err)
 			}
 		case 'l':
-			if err := a.editor.MoveCursorHorizontal(1); err != nil {
+			if err := a.editor.MoveCursorHorizontal(1, false); err != nil {
 				a.showError(err)
 			}
 		case 'k':
-			if err := a.editor.MoveCursorVertical(-1); err != nil {
+			if err := a.editor.MoveCursorVertical(-1, false); err != nil {
 				a.showError(err)
 			}
 		case 'j':
-			if err := a.editor.MoveCursorVertical(1); err != nil {
+			if err := a.editor.MoveCursorVertical(1, false); err != nil {
 				a.showError(err)
 			}
 		}
@@ -235,19 +239,19 @@ func (a *Athena) handleInsertMode(event *tcell.EventKey) *tcell.EventKey {
 			a.showError(err)
 		}
 	case tcell.KeyLeft:
-		if err := a.editor.MoveCursorHorizontal(-1); err != nil {
+		if err := a.editor.MoveCursorHorizontal(-1, false); err != nil {
 			a.showError(err)
 		}
 	case tcell.KeyRight:
-		if err := a.editor.MoveCursorHorizontal(1); err != nil {
+		if err := a.editor.MoveCursorHorizontal(1, false); err != nil {
 			a.showError(err)
 		}
 	case tcell.KeyUp:
-		if err := a.editor.MoveCursorVertical(-1); err != nil {
+		if err := a.editor.MoveCursorVertical(-1, false); err != nil {
 			a.showError(err)
 		}
 	case tcell.KeyDown:
-		if err := a.editor.MoveCursorVertical(1); err != nil {
+		if err := a.editor.MoveCursorVertical(1, false); err != nil {
 			a.showError(err)
 		}
 	case tcell.KeyRune:
@@ -262,62 +266,60 @@ func (a *Athena) handleInsertMode(event *tcell.EventKey) *tcell.EventKey {
 // refreshContent updates the display components with the current buffer state.
 // It uses a string builder for efficient string concatenation.
 func (a *Athena) refreshContent() {
-	b := a.editor.Manager.GetCurrentBuffer()
-	if b == nil {
-		return
-	}
-
 	currLine, currCol, err := a.editor.GetCurrentPosition()
 	if err != nil {
 		return
 	}
 
-	total, err := b.LineCount()
+	total, err := a.editor.GetLineCount()
 	if err != nil {
 		return
 	}
 
+	a.updateViewport()
+
+	// calc visible range
+	visibleStart := a.viewport.offset
+	visibleEnd := min(total, a.viewport.offset+a.viewport.height)
+
 	// Update gutters (line numbers)
 	var gutterBuilder strings.Builder
-	gutterBuilder.Grow(total * (a.config.gutterWidth + 1)) // pre-allocate space
+	gutterBuilder.Grow(a.viewport.height * (a.config.gutterWidth + 1)) // pre-allocate space
 
-	for i := range total {
+	for i := visibleStart; i < visibleEnd; i++ {
 		if i == currLine {
 			fmt.Fprintf(&gutterBuilder, "[white]%*d\n", a.config.gutterWidth-1, i+1)
+		} else if i == total-1 {
+			fmt.Fprintf(&gutterBuilder, "[purple]%*s\n", a.config.gutterWidth-1, "~")
 		} else {
 			fmt.Fprintf(&gutterBuilder, "[purple]%*d\n", a.config.gutterWidth-1, i+1)
 		}
 	}
 
-	// Add placeholder lines for empty space
-	_, _, _, height := a.display.document.GetInnerRect()
-	for i := 0; i < height; i++ {
-		fmt.Fprintf(&gutterBuilder, "[purple]%*s\n", a.config.gutterWidth-1, "~")
-	}
-
 	a.display.gutters.SetText(gutterBuilder.String())
 
-	// Update status bar
+	// Update status bar with scroll information
 	mode := a.editor.GetMode().String()
+	scrollPercent := util.CalcProgress(total, currLine+1)
 
 	status := fmt.Sprintf(" %s | %d%% %d:%d %d ",
 		mode,
-		util.CalcProgress(total, currLine+1),
+		scrollPercent,
 		currLine+1, currCol+1,
 		total)
 
 	a.display.statusBar.SetText(status)
 
-	// Update document with cursor
+	// Update document content with cursor
 	var documentBuilder strings.Builder
-	documentBuilder.Grow(total * 80) // Estimate average line length
+	documentBuilder.Grow(a.viewport.height * 80)
 
-	for i := range total {
-		if i > 0 {
+	for i := visibleStart; i < visibleEnd; i++ {
+		if i > visibleStart {
 			documentBuilder.WriteByte('\n')
 		}
 
-		l, err := b.GetLine(i)
+		l, err := a.editor.GetLine(i)
 		if err != nil {
 			a.showError(err)
 			continue
@@ -344,6 +346,26 @@ func (a *Athena) refreshContent() {
 	}
 
 	a.display.document.SetText(documentBuilder.String())
+}
+
+// updateViewport updates the viewport to ensure the cursor is always visible.
+func (a *Athena) updateViewport() {
+	_, _, _, height := a.display.document.GetInnerRect()
+	a.viewport.height = height
+
+	currLine, _, err := a.editor.GetCurrentPosition()
+	if err != nil {
+		return
+	}
+
+	// adjust viewport if cursor moves too close to the edges
+	if currLine-a.viewport.offset < a.viewport.padding {
+		// cursor too close to top
+		a.viewport.offset = max(0, currLine-a.viewport.padding)
+	} else if currLine-a.viewport.offset > a.viewport.height-a.viewport.padding {
+		// cursor too close to bttom
+		a.viewport.offset = currLine - (a.viewport.height - a.viewport.padding)
+	}
 }
 
 func (a *Athena) showError(err error) {

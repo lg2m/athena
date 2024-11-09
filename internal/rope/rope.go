@@ -3,12 +3,18 @@ package rope
 import (
 	"errors"
 	"strings"
+	"sync"
 
 	"github.com/rivo/uniseg"
 )
 
 // MaxLeafSize defines the maximum number of grapheme clusters in a leaf node.
 const MaxLeafSize = 256
+
+var (
+	ErrInvalidRange = errors.New("invalid range")
+	ErrOutOfBounds  = errors.New("index out of bounds")
+)
 
 // RopeNode represents a node in the Rope data structure.
 type RopeNode struct {
@@ -21,6 +27,7 @@ type RopeNode struct {
 // Rope represents the Rope data structure.
 type Rope struct {
 	root *RopeNode
+	mu   sync.RWMutex
 }
 
 // NewRope creates a new Rope from a string.
@@ -32,9 +39,13 @@ func NewRope(s string) *Rope {
 
 // Insert inserts text at a given grapheme index in the Rope.
 func (r *Rope) Insert(index int, s string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	if index < 0 || index > r.root.totalGraphemes() {
-		return errors.New("index out of bounds")
+		return ErrOutOfBounds
 	}
+
 	// Split the rope at the position
 	left, right := r.root.Split(index)
 	insertRope := NewRope(s)
@@ -46,7 +57,7 @@ func (r *Rope) Insert(index int, s string) error {
 // Delete removes grapheme clusters from start to end (exclusive).
 func (r *Rope) Delete(start, end int) error {
 	if start < 0 || end > r.root.totalGraphemes() || start > end {
-		return errors.New("invalid delete range")
+		return ErrInvalidRange
 	}
 	left, temp := r.root.Split(start)
 	_, right := temp.Split(end - start)
