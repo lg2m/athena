@@ -13,6 +13,11 @@ func GetFileName(filePath string, withExt bool) string {
 	return fileName
 }
 
+func GetFileExt(filePath string) string {
+	ext := filepath.Ext(filePath)
+	return strings.TrimPrefix(ext, ".")
+}
+
 func CalcProgress(tot, curr int) int {
 	if tot == 0 {
 		return 0

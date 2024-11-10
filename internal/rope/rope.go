@@ -183,6 +183,16 @@ func (n *RopeNode) totalGraphemes() int {
 	return n.weight + n.right.totalGraphemes()
 }
 
+// CountGraphemes counts the number of grapheme clusters in a string.
+func CountGraphemes(s string) int {
+	gr := uniseg.NewGraphemes(s)
+	count := 0
+	for gr.Next() {
+		count++
+	}
+	return count
+}
+
 // splitIntoLeaves splits the input string into chunks of up to maxSize grapheme clusters.
 func splitIntoLeaves(s string, maxSize int) []*RopeNode {
 	var leaves []*RopeNode
@@ -243,14 +253,4 @@ func concatenateNodes(left, right *RopeNode) *RopeNode {
 		right:  right,
 		weight: left.totalGraphemes(),
 	}
-}
-
-// CountGraphemes counts the number of grapheme clusters in a string.
-func CountGraphemes(s string) int {
-	gr := uniseg.NewGraphemes(s)
-	count := 0
-	for gr.Next() {
-		count++
-	}
-	return count
 }

@@ -62,6 +62,22 @@ func (e *Editor) OpenFile(filePath string) error {
 	return nil
 }
 
+// FileName returns the file name related to the current active buffer.
+func (e *Editor) FileName() (string, error) {
+	if e.current == nil {
+		return "", ErrNoBuffer
+	}
+	return e.current.FileName(), nil
+}
+
+// FilePath returns the path of the file related to the current active buffer.
+func (e *Editor) FilePath() (string, error) {
+	if e.current == nil {
+		return "", ErrNoBuffer
+	}
+	return e.current.FilePath(), nil
+}
+
 // SwitchBuffer switches to a buffer by file path.
 func (e *Editor) SwitchBuffer(filePath string) error {
 	e.mu.Lock()

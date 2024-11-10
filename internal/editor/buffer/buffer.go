@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -28,6 +29,7 @@ type Buffer struct {
 	document      *rope.Rope
 	selection     Selection
 	name          string
+	filePath      string
 	lastSavePoint time.Time
 	file          *os.File
 	size          int64
@@ -48,10 +50,17 @@ func NewBuffer(filePath string) (*Buffer, error) {
 		return nil, err
 	}
 
+	fp, err := filepath.Abs(filePath)
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+
 	b := &Buffer{
 		document:      rope.NewRope(string(document)),
 		selection:     Selection{Start: 0, End: 0},
 		name:          util.GetFileName(filePath, true),
+		filePath:      fp,
 		lastSavePoint: time.Now(),
 		file:          file,
 		size:          int64(len(document)),
@@ -310,6 +319,20 @@ func (b *Buffer) LineCount() int {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return len(b.lineCache)
+}
+
+// FileName returns the name of the file related to the buffer.
+func (b *Buffer) FileName() string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.name
+}
+
+// FilePath returns the path of the file related to the buffer.
+func (b *Buffer) FilePath() string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.filePath
 }
 
 // updateLineCache rebuilds the cache of line start positions.
