@@ -20,3 +20,14 @@ right = [
 ]
 mode.normal = "NOR"
 mode.insert = "INS"
+
+[keys.normal]
+"h" = "move_left"
+"j" = "move_down"
+"k" = "move_up"
+"l" = "move_right"
+"g" = { "g" = "go_to_top", "e" = "go_to_bottom" }
+"<left>" = "move_left"
+"<down>" = "move_down"
+"<up>" = "move_up"
+"<right>" = "move_right"

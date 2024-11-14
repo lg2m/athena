@@ -68,6 +68,10 @@ func (a *Athena) Run() error {
 			a.screen.Sync()
 			a.resizeViews()
 		}
+
+		if a.views.document.HandleEvent(ev) {
+			continue
+		}
 	}
 }
 
@@ -88,6 +92,7 @@ func (a *Athena) draw() {
 
 func (a *Athena) resizeViews() {
 	width, height := a.screen.Size()
+
 	a.views.gutters.Resize(0, 0, 6, height-1)
 	a.views.document.Resize(6, 0, width-6, height-1)
 	a.views.statusBar.Resize(0, height-1, width, 1)

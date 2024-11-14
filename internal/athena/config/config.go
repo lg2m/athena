@@ -16,36 +16,18 @@ type Config struct {
 
 // LoadConfig loads the configuration from default path or arg.
 func LoadConfig(filePath *string) (*Config, []string) {
-	cfg := defaultConfig()
+	defaultCfg := defaultConfig()
 	var errors []string
 
-	var fileCfg *Config
-	var fileErrors []string
-	var err error
+	// Load from file and merge
+	fileCfg, fileErrors := loadConfigFile(filePath)
+	errors = append(errors, fileErrors...)
+	mergeConfig(defaultCfg, fileCfg)
 
-	if filePath != nil && *filePath != "" {
-		fileCfg, fileErrors, err = loadConfigFromFile(*filePath)
-	} else {
-		homeDir, errs := os.UserHomeDir()
-		if errs != nil {
-			errors = append(errors, fmt.Sprintf("Error getting home directory: %v", errs))
-			return cfg, errors
-		}
+	validateErrors := validateAndFixConfig(defaultCfg)
+	errors = append(errors, validateErrors...)
 
-		cfgPath := filepath.Join(homeDir, ".config", "athena", "config.toml")
-		fileCfg, fileErrors, err = loadConfigFromFile(cfgPath)
-	}
-
-	if err != nil {
-		errors = append(errors, fmt.Sprintf("Error loading config file: %v", err))
-	} else {
-		errors = append(errors, fileErrors...)
-		if fileCfg != nil {
-			applyConfig(cfg, fileCfg)
-		}
-	}
-
-	return cfg, errors
+	return defaultCfg, errors
 }
 
 // defaultConfig provides a default configuration
@@ -70,80 +52,126 @@ func defaultConfig() *Config {
 				},
 			},
 		},
-		Keymap: KeymapConfig{
-			Normal: map[string]interface{}{
-				"i": "enter-insert-mode",
-				"j": "move-down",
-				"k": "move-up",
-				"h": "move-left",
-				"l": "move-right",
-			},
-			Insert: map[string]interface{}{
-				"<Esc>": "enter-normal-mode",
-			},
-		},
+		Keymap: defaultKeymap(),
 	}
 }
 
-// loadConfigFromFile loads the configuration from the given file path
-func loadConfigFromFile(filePath string) (*Config, []string, error) {
+func loadConfigFile(filePath *string) (*Config, []string) {
 	var errors []string
+	if filePath == nil || *filePath == "" {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("Error finding home directory: %v", err))
+			return nil, errors
+		}
+		cfgPath := filepath.Join(homeDir, ".config", "athena", "config.toml")
+		filePath = &cfgPath
+	}
 
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		return nil, errors, nil
+	if _, err := os.Stat(*filePath); os.IsNotExist(err) {
+		return nil, errors // No file, no problem
 	}
 
 	cfg := &Config{}
-	if _, err := toml.DecodeFile(filePath, cfg); err != nil {
-		return nil, errors, fmt.Errorf("error decoding config file: %v", err)
+	if _, err := toml.DecodeFile(*filePath, cfg); err != nil {
+		errors = append(errors, fmt.Sprintf("Error decoding file: %v", err))
 	}
 
-	errors = validateConfig(cfg)
-
-	return cfg, errors, nil
+	return cfg, errors
 }
 
-// validateConfig validates and ensures the values are in a usable state.
-func validateConfig(cfg *Config) []string {
+func mergeConfig(dst *Config, src *Config) {
+	if src == nil {
+		return
+	}
+	if src.Editor.ScrollPadding != 0 {
+		dst.Editor.ScrollPadding = src.Editor.ScrollPadding
+	}
+	if src.Editor.LineNumber != "" {
+		dst.Editor.LineNumber = src.Editor.LineNumber
+	}
+	if src.Editor.CursorShape.Insert != "" {
+		dst.Editor.CursorShape.Insert = src.Editor.CursorShape.Insert
+	}
+	if src.Editor.CursorShape.Normal != "" {
+		dst.Editor.CursorShape.Normal = src.Editor.CursorShape.Normal
+	}
+	dst.Editor.BufferLine = src.Editor.BufferLine
+	if len(src.Editor.Gutters) > 0 {
+		dst.Editor.Gutters = src.Editor.Gutters
+	}
+	if len(src.Editor.StatusBar.Left) > 0 {
+		dst.Editor.StatusBar.Left = src.Editor.StatusBar.Left
+	}
+	if len(src.Editor.StatusBar.Center) > 0 {
+		dst.Editor.StatusBar.Center = src.Editor.StatusBar.Center
+	}
+	if len(src.Editor.StatusBar.Right) > 0 {
+		dst.Editor.StatusBar.Right = src.Editor.StatusBar.Right
+	}
+	if src.Editor.StatusBar.Mode.Normal != "" {
+		dst.Editor.StatusBar.Mode.Normal = src.Editor.StatusBar.Mode.Normal
+	}
+	if src.Editor.StatusBar.Mode.Insert != "" {
+		dst.Editor.StatusBar.Mode.Insert = src.Editor.StatusBar.Mode.Insert
+	}
+	for key, action := range src.Keymap.Normal {
+		dst.Keymap.Normal[key] = action
+	}
+	for key, action := range src.Keymap.Insert {
+		dst.Keymap.Insert[key] = action
+	}
+}
+
+// validateAndFixConfig validates and ensures the values are in a usable state.
+func validateAndFixConfig(cfg *Config) []string {
 	var errors []string
 
 	// Validate Editor Config
 	editor := &cfg.Editor
 
 	// Validate LineNumber
-	if editor.LineNumber != "" && !editor.LineNumber.IsValid() {
+	if !editor.LineNumber.IsValid() {
 		errors = append(errors, fmt.Sprintf("Invalid line-number option: %s", editor.LineNumber))
 		editor.LineNumber = LineNumberRelative // Reset to default
 	}
 
 	// Validate CursorShape
-	if editor.CursorShape.Insert != "" && !editor.CursorShape.Insert.IsValid() {
+	if !editor.CursorShape.Insert.IsValid() {
 		errors = append(errors, fmt.Sprintf("Invalid cursor-shape insert option: %s", editor.CursorShape.Insert))
-		editor.CursorShape.Insert = CursorBar // Reset to default
+		editor.CursorShape.Insert = CursorBar
 	}
-	if editor.CursorShape.Normal != "" && !editor.CursorShape.Normal.IsValid() {
+	if !editor.CursorShape.Normal.IsValid() {
 		errors = append(errors, fmt.Sprintf("Invalid cursor-shape normal option: %s", editor.CursorShape.Normal))
-		editor.CursorShape.Normal = CursorBlock // Reset to default
+		editor.CursorShape.Normal = CursorBlock
 	}
 
 	// Validate Gutters
-	var validGutters []GutterOption
-	for _, gutter := range editor.Gutters {
-		if gutter.IsValid() {
-			validGutters = append(validGutters, gutter)
-		} else {
-			errors = append(errors, fmt.Sprintf("Invalid gutter option: %s", gutter))
-		}
-	}
-	editor.Gutters = validGutters
-	if len(editor.Gutters) == 0 {
-		editor.Gutters = []GutterOption{GutterSpacer, GutterLineNumbers, GutterSpacer} // Reset to default if empty
-	}
+	editor.Gutters = filterValidGutters(editor.Gutters, &errors)
 
-	// Validate StatusBar Options
+	// Validate StatusBar
 	validateStatusBarConfig(&editor.StatusBar, &errors)
 
+	for i := 0; i < len(errors); i++ {
+		fmt.Printf("%s\n", errors[i])
+	}
+
 	return errors
+}
+
+func filterValidGutters(gutters []GutterOption, errors *[]string) []GutterOption {
+	var valid []GutterOption
+	for _, gutter := range gutters {
+		if gutter.IsValid() {
+			valid = append(valid, gutter)
+		} else {
+			*errors = append(*errors, fmt.Sprintf("Invalid gutter option: %s", gutter))
+		}
+	}
+	if len(valid) == 0 {
+		return []GutterOption{GutterSpacer, GutterLineNumbers, GutterSpacer} // Default
+	}
+	return valid
 }
 
 func validateStatusBarConfig(statusBar *StatusBarConfig, errors *[]string) {
@@ -189,57 +217,5 @@ func validateStatusBarConfig(statusBar *StatusBarConfig, errors *[]string) {
 	}
 	if len(statusBar.Right) == 0 {
 		statusBar.Right = []StatusBarOption{SectionCursorPercentage, SectionCursorPos, SectionLineCount, SectionFileType}
-	}
-}
-
-func applyConfig(dst *Config, src *Config) {
-	if src == nil {
-		return
-	}
-
-	// Apply Editor config
-	if src.Editor.ScrollPadding != 0 {
-		dst.Editor.ScrollPadding = src.Editor.ScrollPadding
-	}
-
-	if src.Editor.LineNumber != "" {
-		dst.Editor.LineNumber = src.Editor.LineNumber
-	}
-
-	if src.Editor.CursorShape.Insert != "" {
-		dst.Editor.CursorShape.Insert = src.Editor.CursorShape.Insert
-	}
-	if src.Editor.CursorShape.Normal != "" {
-		dst.Editor.CursorShape.Normal = src.Editor.CursorShape.Normal
-	}
-
-	dst.Editor.BufferLine = src.Editor.BufferLine
-
-	if len(src.Editor.Gutters) > 0 {
-		dst.Editor.Gutters = src.Editor.Gutters
-	}
-
-	if len(src.Editor.StatusBar.Left) > 0 {
-		dst.Editor.StatusBar.Left = src.Editor.StatusBar.Left
-	}
-	if len(src.Editor.StatusBar.Center) > 0 {
-		dst.Editor.StatusBar.Center = src.Editor.StatusBar.Center
-	}
-	if len(src.Editor.StatusBar.Right) > 0 {
-		dst.Editor.StatusBar.Right = src.Editor.StatusBar.Right
-	}
-	if src.Editor.StatusBar.Mode.Normal != "" {
-		dst.Editor.StatusBar.Mode.Normal = src.Editor.StatusBar.Mode.Normal
-	}
-	if src.Editor.StatusBar.Mode.Insert != "" {
-		dst.Editor.StatusBar.Mode.Insert = src.Editor.StatusBar.Mode.Insert
-	}
-
-	// Apply Keymap config
-	if len(src.Keymap.Normal) > 0 {
-		dst.Keymap.Normal = src.Keymap.Normal
-	}
-	if len(src.Keymap.Insert) > 0 {
-		dst.Keymap.Insert = src.Keymap.Insert
 	}
 }

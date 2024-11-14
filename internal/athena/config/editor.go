@@ -23,11 +23,13 @@ type CursorShape string
 const (
 	CursorBar   CursorShape = "bar"
 	CursorBlock CursorShape = "block"
+	CursorLine  CursorShape = "line"
+	CursorUnder CursorShape = "underline"
 )
 
 func (cs CursorShape) IsValid() bool {
 	switch cs {
-	case CursorBar, CursorBlock:
+	case CursorBar, CursorBlock, CursorLine, CursorUnder:
 		return true
 	default:
 		return false

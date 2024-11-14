@@ -124,9 +124,9 @@ func (e *Editor) InsertText(text string) error {
 		return ErrNoBuffer
 	}
 
-	if e.mode != state.Insert {
-		return ErrInvalidOperation
-	}
+	// if e.mode != state.Insert {
+	// 	return ErrInvalidOperation
+	// }
 
 	e.current.CollapseSelectionsToCursor()
 
@@ -161,13 +161,6 @@ func (e *Editor) DeleteText(length int) error {
 		pos += length
 		length = -length
 	}
-
-	// pos := e.current.Cursor()
-	// if length < 0 {
-	// 	// Handle backward delete
-	// 	pos += length
-	// 	length = -length
-	// }
 
 	return e.current.Delete(pos, pos+length)
 }
@@ -213,22 +206,10 @@ func (e *Editor) MoveCursorHorizontal(offset int, extend bool) error {
 
 	e.desiredColumn = col
 	return nil
-
-	// if err := e.current.MoveCursor(offset); err != nil {
-	// 	return err
-	// }
-
-	// _, col, err := e.current.PositionToLineCol(e.current.Cursor())
-	// if err != nil {
-	// 	return err
-	// }
-
-	// e.desiredColumn = col
-	// return nil
 }
 
-// MoveCursorVertical moves the cursor vertically while maintaining the desired column position in the current buffer.
-func (e *Editor) MoveCursorVertical(offset int, extend bool) error {
+// JumpFromCursor moves the cursor a specified number of lines relative to the current cursor position while maintaining the column position.
+func (e *Editor) JumpFromCursor(offset int, extend bool) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -236,11 +217,53 @@ func (e *Editor) MoveCursorVertical(offset int, extend bool) error {
 		return ErrNoBuffer
 	}
 
-	// get the pos of the first selection's end
+	// get current pos
 	selection := e.current.Selection()
-	pos := selection.End
+	currLine, currCol, err := e.current.PositionToLineCol(selection.End)
+	if err != nil {
+		return err
+	}
 
-	currLine, currCol, err := e.current.PositionToLineCol(pos)
+	// calc target line
+	targetLine := currLine + offset
+
+	// bounds check
+	if targetLine < 0 {
+		targetLine = 0
+	}
+	totalLines := e.current.LineCount()
+	if targetLine >= totalLines {
+		targetLine = totalLines - 1
+	}
+
+	if e.desiredColumn == -1 {
+		e.desiredColumn = currCol
+	}
+
+	return e.current.MoveSelectionToLineCol(targetLine, e.desiredColumn, extend)
+}
+
+// JumpToLine moves the cursor to a specific line number (0-based) and attempts to retain column position (when possible).
+func (e *Editor) JumpToLine(lineNum int, extend bool) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.current == nil {
+		return ErrNoBuffer
+	}
+
+	// bounds check
+	if lineNum < 0 {
+		lineNum = 0
+	}
+	totalLines := e.current.LineCount()
+	if lineNum >= totalLines {
+		lineNum = totalLines - 1
+	}
+
+	// current column for maintaining desired column
+	selection := e.current.Selection()
+	_, currCol, err := e.current.PositionToLineCol(selection.End)
 	if err != nil {
 		return err
 	}
@@ -249,39 +272,28 @@ func (e *Editor) MoveCursorVertical(offset int, extend bool) error {
 		e.desiredColumn = currCol
 	}
 
-	targetLine := currLine + offset
-	if targetLine < 0 {
-		targetLine = 0
+	return e.current.MoveSelectionToLineCol(lineNum, e.desiredColumn, extend)
+}
+
+// JumpToTop moves the cursor to the beginning of the document.
+func (e *Editor) JumpToTop(extend bool) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.current == nil {
+		return ErrNoBuffer
 	}
+	return e.current.MoveSelectionToLineCol(0, 0, extend)
+}
 
-	totalLines := e.current.LineCount()
-	if targetLine >= totalLines {
-		targetLine = totalLines - 1
+// JumpToBottom moves the cursor to the end of the document.
+func (e *Editor) JumpToBottom(extend bool) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.current == nil {
+		return ErrNoBuffer
 	}
-
-	return e.current.MoveSelectionToLineCol(targetLine, e.desiredColumn, extend)
-
-	// currLine, currCol, err := e.current.PositionToLineCol(e.current.Cursor())
-	// if err != nil {
-	// 	return err
-	// }
-
-	// if e.desiredColumn == 0 {
-	// 	e.desiredColumn = currCol
-	// }
-
-	// targetLine := currLine + offset
-	// if targetLine < 0 {
-	// 	targetLine = 0
-	// }
-
-	// totalLines := e.current.LineCount()
-	// if targetLine >= totalLines {
-	// 	targetLine = totalLines - 1
-	// }
-
-	// _, _, err = e.current.MoveCursorToLineCol(targetLine, e.desiredColumn)
-	// return err
+	lastLine := e.current.LineCount() - 1
+	return e.current.MoveSelectionToLineCol(lastLine, 0, extend)
 }
 
 // SaveCurrentBuffer saves the current buffer.
