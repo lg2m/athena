@@ -1,0 +1,3 @@
+test:
+    @echo "Running test cases"
+    @go test -v ./...
