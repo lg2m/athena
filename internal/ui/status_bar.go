@@ -87,8 +87,7 @@ func (v *StatusBarView) getOptionString(opt config.StatusBarOption) string {
 	// case config.SectionFileModified:
 	// case config.SectionFileEncoding:
 	case config.SectionFileType:
-		if filePath, err := v.editor.FilePath(); err == nil && filePath != "" {
-			ext := util.GetFileExt(filePath)
+		if ext, err := v.editor.FileType(); err == nil && ext != "" {
 			return fmt.Sprintf(" %s ", ext)
 		}
 	// case config.SectionVersionControl:

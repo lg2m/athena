@@ -235,6 +235,12 @@ func (v *DocumentView) executeAction(action string) bool {
 		mult := v.getNumericPrefixOrDefault(1)
 		_ = v.editor.JumpFromCursor(-mult, false)
 		v.centerCursor()
+	case "move_next_word":
+		_ = v.editor.MoveToNextWord(false)
+		v.centerCursor()
+	case "move_prev_word":
+		_ = v.editor.MoveToPrevWord(false)
+		v.centerCursor()
 	case "delete_backwards":
 		_ = v.editor.DeleteText(-1)
 	case "delete_forward":

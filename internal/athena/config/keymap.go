@@ -19,6 +19,8 @@ func defaultKeymap() KeymapConfig {
 			"k": "move_up",
 			"h": "move_left",
 			"l": "move_right",
+			"w": "move_next_word",
+			"b": "move_prev_word",
 			"g": map[string]string{
 				"g": "go_to_top",
 				"e": "go_to_bottom",

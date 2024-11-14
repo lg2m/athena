@@ -28,13 +28,14 @@ type Selection struct {
 type Buffer struct {
 	document      *rope.Rope
 	selection     Selection
-	name          string
 	filePath      string
 	lastSavePoint time.Time
 	file          *os.File
 	size          int64
 	lineCache     []int
-	mu            sync.RWMutex
+
+	FileUtil *util.FileUtil
+	mu       sync.RWMutex
 }
 
 // NewBuffer creates a new Buffer with optional initial content.
@@ -59,11 +60,11 @@ func NewBuffer(filePath string) (*Buffer, error) {
 	b := &Buffer{
 		document:      rope.NewRope(string(document)),
 		selection:     Selection{Start: 0, End: 0},
-		name:          util.GetFileName(filePath, true),
 		filePath:      fp,
 		lastSavePoint: time.Now(),
 		file:          file,
 		size:          int64(len(document)),
+		FileUtil:      util.NewFileUtil(nil),
 	}
 
 	b.updateLineCache()
@@ -115,9 +116,6 @@ func (b *Buffer) Delete(start, end int) error {
 	if b.selection.Start > start {
 		b.selection = Selection{Start: start, End: start}
 	}
-	// if b.cursor.Position > start {
-	// 	b.cursor.SetPosition(start)
-	// }
 
 	b.size -= int64(end - start)
 	b.updateLineCache()
@@ -212,7 +210,7 @@ func (b *Buffer) MoveSelections(offset int, extend bool) error {
 	defer b.mu.Unlock()
 
 	newPos := b.selection.End + offset
-	newPos = clamp(newPos, 0, b.document.TotalGraphemes())
+	newPos = util.Clamp(newPos, 0, b.document.TotalGraphemes())
 	if extend {
 		// extend the selection end
 		b.selection.End = newPos
@@ -325,7 +323,14 @@ func (b *Buffer) LineCount() int {
 func (b *Buffer) FileName() string {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	return b.name
+	return b.FileUtil.GetFileName(b.filePath, true)
+}
+
+// FileType returns the type of file in the buffer.
+func (b *Buffer) FileType() string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.FileUtil.GetFileExt(b.filePath)
 }
 
 // FilePath returns the path of the file related to the buffer.
@@ -346,15 +351,4 @@ func (b *Buffer) updateLineCache() {
 			b.lineCache = append(b.lineCache, i+1)
 		}
 	}
-}
-
-// clamp clamps a value within a range.
-func clamp(val, min, max int) int {
-	if val < min {
-		return min
-	}
-	if val > max {
-		return max
-	}
-	return val
 }

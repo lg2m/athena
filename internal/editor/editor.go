@@ -70,6 +70,14 @@ func (e *Editor) FileName() (string, error) {
 	return e.current.FileName(), nil
 }
 
+// FileType returns the file name related to the current active buffer.
+func (e *Editor) FileType() (string, error) {
+	if e.current == nil {
+		return "", ErrNoBuffer
+	}
+	return e.current.FileName(), nil
+}
+
 // FilePath returns the path of the file related to the current active buffer.
 func (e *Editor) FilePath() (string, error) {
 	if e.current == nil {
@@ -294,6 +302,26 @@ func (e *Editor) JumpToBottom(extend bool) error {
 	}
 	lastLine := e.current.LineCount() - 1
 	return e.current.MoveSelectionToLineCol(lastLine, 0, extend)
+}
+
+// MoveToNextWord moves the cursor to the beginning of the next word boundary.
+func (e *Editor) MoveToNextWord(extend bool) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.current == nil {
+		return ErrNoBuffer
+	}
+	return e.current.MoveToNextWord(extend)
+}
+
+// MoveToPrevWord moves the cursor to the beginning of the previous word boundary.
+func (e *Editor) MoveToPrevWord(extend bool) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.current == nil {
+		return ErrNoBuffer
+	}
+	return e.current.MoveToPrevWord(extend)
 }
 
 // SaveCurrentBuffer saves the current buffer.
