@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lg2m/athena/internal/editor/state"
 	"github.com/lg2m/athena/internal/rope"
 	"github.com/lg2m/athena/internal/util"
 )
@@ -19,15 +20,10 @@ var (
 	ErrInvalidSelection = errors.New("invalid selection")
 )
 
-type Selection struct {
-	Start int
-	End   int
-}
-
 // Buffer represents a single text buffer (document).
 type Buffer struct {
 	document      *rope.Rope
-	selection     Selection
+	selection     state.Selection
 	filePath      string
 	lastSavePoint time.Time
 	file          *os.File
@@ -59,7 +55,7 @@ func NewBuffer(filePath string) (*Buffer, error) {
 
 	b := &Buffer{
 		document:      rope.NewRope(string(document)),
-		selection:     Selection{Start: 0, End: 0},
+		selection:     state.Selection{Start: 0, End: 0},
 		filePath:      fp,
 		lastSavePoint: time.Now(),
 		file:          file,
@@ -91,14 +87,9 @@ func (b *Buffer) Insert(s string) error {
 
 	// update selection to new position
 	newEnd := b.selection.Start + rope.CountGraphemes(s)
-	b.selection = Selection{Start: newEnd, End: newEnd}
-
-	// if err := b.document.Insert(b.cursor.Position, s); err != nil {
-	// 	return err
-	// }
+	b.selection = state.Selection{Start: newEnd, End: newEnd}
 
 	b.size += int64(len(s))
-	// b.cursor.Position += rope.CountGraphemes(s)
 	b.updateLineCache()
 
 	return nil
@@ -114,7 +105,7 @@ func (b *Buffer) Delete(start, end int) error {
 	}
 
 	if b.selection.Start > start {
-		b.selection = Selection{Start: start, End: start}
+		b.selection = state.Selection{Start: start, End: start}
 	}
 
 	b.size -= int64(end - start)
@@ -134,7 +125,7 @@ func (b *Buffer) DeleteSelection() error {
 		return err
 	}
 
-	b.selection = Selection{Start: start, End: start}
+	b.selection = state.Selection{Start: start, End: start}
 	b.size -= int64(end - start)
 	b.updateLineCache()
 
@@ -200,7 +191,7 @@ func (b *Buffer) CollapseSelectionsToCursor() {
 	defer b.mu.Unlock()
 
 	pos := b.selection.End
-	b.selection = Selection{Start: pos, End: pos}
+	b.selection = state.Selection{Start: pos, End: pos}
 }
 
 // MoveSelections moves the selections by the specified offset.
@@ -216,7 +207,7 @@ func (b *Buffer) MoveSelections(offset int, extend bool) error {
 		b.selection.End = newPos
 	} else {
 		// move both start and end (cursor movement)
-		b.selection = Selection{Start: newPos, End: newPos}
+		b.selection = state.Selection{Start: newPos, End: newPos}
 	}
 
 	return nil
@@ -250,14 +241,14 @@ func (b *Buffer) MoveSelectionToLineCol(line, col int, extend bool) error {
 	if extend {
 		b.selection.End = targetPos
 	} else {
-		b.selection = Selection{Start: targetPos, End: targetPos}
+		b.selection = state.Selection{Start: targetPos, End: targetPos}
 	}
 
 	return nil
 }
 
 // Selections returns the current selections.
-func (b *Buffer) Selection() Selection {
+func (b *Buffer) Selection() state.Selection {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return b.selection

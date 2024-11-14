@@ -21,7 +21,7 @@ var (
 type Editor struct {
 	buffers       map[string]*buffer.Buffer // keys by absolute file path
 	current       *buffer.Buffer
-	mode          state.Mode
+	mode          state.EditorMode
 	desiredColumn int // track movement
 	mu            sync.RWMutex
 }
@@ -114,12 +114,12 @@ func (e *Editor) GetBufferList() []string {
 }
 
 // GetMode returns the current mode state.
-func (e *Editor) GetMode() state.Mode {
+func (e *Editor) GetMode() state.EditorMode {
 	return e.mode
 }
 
 // SetMode sets the current editor mode state.
-func (e *Editor) SetMode(mode state.Mode) {
+func (e *Editor) SetMode(mode state.EditorMode) {
 	e.mode = mode
 }
 
@@ -132,9 +132,10 @@ func (e *Editor) InsertText(text string) error {
 		return ErrNoBuffer
 	}
 
-	// if e.mode != state.Insert {
-	// 	return ErrInvalidOperation
-	// }
+	// TODO: may not be desirable
+	if e.mode != state.Insert {
+		return ErrInvalidOperation
+	}
 
 	e.current.CollapseSelectionsToCursor()
 
@@ -175,19 +176,31 @@ func (e *Editor) DeleteText(length int) error {
 
 // GetCurrentPosition retrieves the current line and column of the cursor.
 func (e *Editor) GetCurrentPosition() (int, int, error) {
+	selection := e.current.Selection()
+	pos := selection.End
+	return e.current.PositionToLineCol(pos)
+}
+
+// LineCol retrieves the current line and column of a position.
+func (e *Editor) LineCol(pos int) (int, int, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
 	if e.current == nil {
 		return 0, 0, ErrNoBuffer
 	}
-
-	selection := e.current.Selection()
-	pos := selection.End
 	return e.current.PositionToLineCol(pos)
+}
 
-	// pos := e.current.Cursor()
-	// return e.current.PositionToLineCol(pos)
+// Selection retrieves the current selection in the active buffer.
+func (e *Editor) Selection() (state.Selection, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if e.current == nil {
+		return state.Selection{}, ErrNoBuffer
+	}
+	return e.current.Selection(), nil
 }
 
 // MoveCursorHorizontal moves the cursor horizontally in the current buffer.

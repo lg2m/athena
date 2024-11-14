@@ -1,1 +1,2 @@
-rust/target
+dist
+test.rs

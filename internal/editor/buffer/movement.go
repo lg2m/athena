@@ -4,6 +4,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/lg2m/athena/internal/editor/state"
 	"github.com/lg2m/athena/internal/util"
 )
 
@@ -19,7 +20,7 @@ func (b *Buffer) MoveToNextWord(extend bool) error {
 		b.selection.End = newPos
 	} else {
 		// Move cursor to new position (collapse selection)
-		b.selection = Selection{Start: newPos, End: newPos}
+		b.selection = state.Selection{Start: newPos, End: newPos}
 	}
 
 	return nil
@@ -40,7 +41,7 @@ func (b *Buffer) MoveToPrevWord(extend bool) error {
 			b.selection.Start = newPos
 		}
 	} else {
-		b.selection = Selection{Start: newPos, End: newPos}
+		b.selection = state.Selection{Start: newPos, End: newPos}
 	}
 
 	return nil

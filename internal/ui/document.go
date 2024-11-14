@@ -47,6 +47,9 @@ func (v *DocumentView) Draw(screen tcell.Screen) {
 	mode := v.editor.GetMode()
 	cursorShape := v.getCursorShape(mode)
 
+	// Get the current selection range
+	// selection, _ := v.editor.Selection()
+
 	for i := 0; i < v.height; i++ {
 		lineIdx := start + i
 		if lineIdx >= end {
@@ -59,17 +62,36 @@ func (v *DocumentView) Draw(screen tcell.Screen) {
 		}
 
 		runes := []rune(line)
-		for x, ch := range runes {
+
+		for x := range runes {
 			style := tcell.StyleDefault
+
+			// If we have a selection (start != end) and current position is within selection
+			// if selection.Start != selection.End && x >= selection.Start && x < selection.End {
+			// 	style = style.Background(tcell.ColorGray)
+			// }
+
+			// If this is the cursor position, apply cursor style
 			if lineIdx == currLine && x == currCol {
-				style = v.getCursorStyle(cursorShape)
+				if mode == state.Normal {
+					style = v.getCursorStyle(cursorShape)
+				} else {
+					style = style.Reverse(true)
+				}
 			}
-			screen.SetContent(v.x+x, v.y+i, ch, nil, style)
+
+			screen.SetContent(v.x+x, v.y+i, runes[x], nil, style)
 		}
 
-		// Draw cursor at end of line if needed
+		// Handle cursor at end of line
 		if lineIdx == currLine && currCol >= len(runes) {
-			screen.SetContent(v.x+len(runes), v.y+i, ' ', nil, v.getCursorStyle(cursorShape))
+			style := tcell.StyleDefault
+			if mode == state.Normal {
+				style = v.getCursorStyle(cursorShape)
+			} else {
+				style = style.Reverse(true)
+			}
+			screen.SetContent(v.x+len(runes), v.y+i, ' ', nil, style)
 		}
 	}
 
@@ -281,7 +303,7 @@ func (v *DocumentView) centerCursor() {
 	}
 }
 
-func (v *DocumentView) getCursorShape(mode state.Mode) config.CursorShape {
+func (v *DocumentView) getCursorShape(mode state.EditorMode) config.CursorShape {
 	switch mode {
 	case state.Insert:
 		return v.cfg.Editor.CursorShape.Insert
