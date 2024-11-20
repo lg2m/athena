@@ -50,6 +50,50 @@ func (v *DocumentView) Draw(screen tcell.Screen) {
 	// Get the current selection range
 	// selection, _ := v.editor.Selection()
 
+	highlights, err := v.editor.GetHighlights()
+	if err != nil {
+		return
+	}
+
+	type HighlightRange struct {
+		StartCol int
+		EndCol   int
+		Style    tcell.Style
+	}
+
+	lineHighlightMap := make(map[int][]HighlightRange)
+	for _, h := range highlights {
+		startLine := int(h.Start.Row)
+		startCol := int(h.Start.Column)
+		endLine := int(h.End.Row)
+		endCol := int(h.End.Column)
+		style := h.Style
+
+		for line := startLine; line <= endLine; line++ {
+			lineStartCol := 0
+			lineEndCol := -1
+			if line == startLine {
+				lineStartCol = startCol
+			}
+			if line == endLine {
+				lineEndCol = endCol
+			}
+
+			lineRanges, exists := lineHighlightMap[line]
+			if !exists {
+				lineRanges = []HighlightRange{}
+			}
+
+			lineRanges = append(lineRanges, HighlightRange{
+				StartCol: lineStartCol,
+				EndCol:   lineEndCol,
+				Style:    style,
+			})
+
+			lineHighlightMap[line] = lineRanges
+		}
+	}
+
 	for i := 0; i < v.height; i++ {
 		lineIdx := start + i
 		if lineIdx >= end {
@@ -62,16 +106,31 @@ func (v *DocumentView) Draw(screen tcell.Screen) {
 		}
 
 		runes := []rune(line)
+		styles := make([]tcell.Style, len(runes))
+		for j := range styles {
+			styles[j] = tcell.StyleDefault
+		}
+
+		if lineRanges, exists := lineHighlightMap[lineIdx]; exists {
+			for _, r := range lineRanges {
+				startCol := r.StartCol
+				endCol := r.EndCol
+				if endCol == -1 || endCol > len(styles) {
+					endCol = len(styles)
+				}
+				if startCol < 0 {
+					startCol = 0
+				}
+				for j := startCol; j < endCol && j < len(styles); j++ {
+					styles[j] = r.Style
+				}
+			}
+		}
 
 		for x := range runes {
-			style := tcell.StyleDefault
+			style := styles[x]
 
-			// If we have a selection (start != end) and current position is within selection
-			// if selection.Start != selection.End && x >= selection.Start && x < selection.End {
-			// 	style = style.Background(tcell.ColorGray)
-			// }
-
-			// If this is the cursor position, apply cursor style
+			// apply cursor style if this is the cursor position
 			if lineIdx == currLine && x == currCol {
 				if mode == state.Normal {
 					style = v.getCursorStyle(cursorShape)

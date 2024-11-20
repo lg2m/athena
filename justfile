@@ -5,6 +5,10 @@ run arg:
 
 build:
     @go build -o {{binary_name}} cmd/athena/main.go
+
+clean:
+    @echo "Cleaning up.."
+    rm {{binary_name}}
     
 test:
     @echo "Running test cases"

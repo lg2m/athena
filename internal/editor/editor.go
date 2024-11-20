@@ -7,6 +7,7 @@ import (
 
 	"github.com/lg2m/athena/internal/editor/buffer"
 	"github.com/lg2m/athena/internal/editor/state"
+	"github.com/lg2m/athena/internal/editor/treesitter"
 )
 
 var (
@@ -388,6 +389,16 @@ func (e *Editor) GetLine(lineNum int) (string, error) {
 		return "", ErrNoBuffer
 	}
 	return e.current.GetLine(lineNum)
+}
+
+func (e *Editor) GetHighlights() ([]treesitter.Highlight, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if e.current == nil {
+		return nil, ErrNoBuffer
+	}
+	return e.current.GetHighlights()
 }
 
 // GetLineCount returns the total number of lines in the buffer.

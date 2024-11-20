@@ -9,18 +9,20 @@ import (
 	"time"
 
 	"github.com/lg2m/athena/internal/editor/state"
+	"github.com/lg2m/athena/internal/editor/treesitter"
 	"github.com/lg2m/athena/internal/rope"
 	"github.com/lg2m/athena/internal/util"
+	"github.com/rivo/uniseg"
 )
 
 var (
-	ErrInvalidRange     = errors.New("invalid range")
-	ErrInvalidPosition  = errors.New("invalid position")
-	ErrInvalidLineCol   = errors.New("invalid line/column")
-	ErrInvalidSelection = errors.New("invalid selection")
+	ErrInvalidRange     = errors.New("buffer: poition range exeeds document boundaries")
+	ErrInvalidPosition  = errors.New("buffer: position exceeds document boundaries")
+	ErrInvalidLineCol   = errors.New("buffer: line/column position out of bounds")
+	ErrInvalidSelection = errors.New("buffer: selection boundaries are invalid")
 )
 
-// Buffer represents a single text buffer (document).
+// Buffer represents a text buffer with support for syntax highlighting and concurrent access.
 type Buffer struct {
 	document      *rope.Rope
 	selection     state.Selection
@@ -29,9 +31,13 @@ type Buffer struct {
 	file          *os.File
 	size          int64
 	lineCache     []int
+	highlighter   *treesitter.Highlighter
+	dirty         bool
 
 	FileUtil *util.FileUtil
-	mu       sync.RWMutex
+
+	lineCacheMu sync.RWMutex
+	mu          sync.RWMutex
 }
 
 // NewBuffer creates a new Buffer with optional initial content.
@@ -53,6 +59,19 @@ func NewBuffer(filePath string) (*Buffer, error) {
 		return nil, err
 	}
 
+	// Setup registry
+	registry := treesitter.NewRegistry(treesitter.DefaultStyles)
+
+	// Register langauges
+	registry.RegisterLanguage(&treesitter.RustLanguage{})
+
+	// Create highlighter
+	highlighter, err := treesitter.NewHighlighter(registry, "rust")
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+
 	b := &Buffer{
 		document:      rope.NewRope(string(document)),
 		selection:     state.Selection{Start: 0, End: 0},
@@ -60,6 +79,7 @@ func NewBuffer(filePath string) (*Buffer, error) {
 		lastSavePoint: time.Now(),
 		file:          file,
 		size:          int64(len(document)),
+		highlighter:   highlighter,
 		FileUtil:      util.NewFileUtil(nil),
 	}
 
@@ -78,6 +98,7 @@ func (b *Buffer) Insert(s string) error {
 		if err := b.document.Delete(b.selection.Start, b.selection.End); err != nil {
 			return err
 		}
+		b.size -= int64(b.selection.End - b.selection.Start)
 	}
 
 	// insert new text at selection start
@@ -86,12 +107,13 @@ func (b *Buffer) Insert(s string) error {
 	}
 
 	// update selection to new position
-	newEnd := b.selection.Start + rope.CountGraphemes(s)
+	graphemeCount := countGraphemes(s)
+	newEnd := b.selection.Start + graphemeCount
 	b.selection = state.Selection{Start: newEnd, End: newEnd}
 
 	b.size += int64(len(s))
+	b.dirty = true
 	b.updateLineCache()
-
 	return nil
 }
 
@@ -110,7 +132,6 @@ func (b *Buffer) Delete(start, end int) error {
 
 	b.size -= int64(end - start)
 	b.updateLineCache()
-
 	return nil
 }
 
@@ -120,7 +141,6 @@ func (b *Buffer) DeleteSelection() error {
 	defer b.mu.Unlock()
 
 	start, end := b.selection.Start, b.selection.End
-
 	if err := b.document.Delete(start, end); err != nil {
 		return err
 	}
@@ -128,22 +148,15 @@ func (b *Buffer) DeleteSelection() error {
 	b.selection = state.Selection{Start: start, End: start}
 	b.size -= int64(end - start)
 	b.updateLineCache()
-
 	return nil
-}
-
-// GetText returns text between start and end positions.
-func (b *Buffer) GetText(start, end int) (string, error) {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return b.document.GetTextRange(start, end)
 }
 
 // GetSelectedText returns the text within the current selections.
 func (b *Buffer) GetSelectedText() (string, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	return b.document.GetTextRange(b.selection.Start, b.selection.End)
+
+	return b.document.Substring(b.selection.Start, b.selection.End)
 }
 
 // Save writes buffer content to disk.
@@ -159,12 +172,13 @@ func (b *Buffer) Save() error {
 		return err
 	}
 
-	_, err := b.file.WriteString(b.document.ToString())
+	_, err := b.file.WriteString(b.document.String())
 	if err != nil {
 		return err
 	}
 
 	b.lastSavePoint = time.Now()
+	b.dirty = false
 	return nil
 }
 
@@ -173,16 +187,13 @@ func (b *Buffer) Close() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	// Save any remaining dirty chunks
-	if err := b.Save(); err != nil {
-		return err
+	// Save remaining dirty content
+	if b.dirty {
+		if err := b.Save(); err != nil {
+			return err
+		}
 	}
-
-	if err := b.file.Close(); err != nil {
-		return err
-	}
-
-	return nil
+	return b.file.Close()
 }
 
 // CollapseSelectionsToCursor collapses all selections to their end positions.
@@ -194,63 +205,11 @@ func (b *Buffer) CollapseSelectionsToCursor() {
 	b.selection = state.Selection{Start: pos, End: pos}
 }
 
-// MoveSelections moves the selections by the specified offset.
-// If `extend` is true, it extends the selection; otherwise, it moves the cursor.
-func (b *Buffer) MoveSelections(offset int, extend bool) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	newPos := b.selection.End + offset
-	newPos = util.Clamp(newPos, 0, b.document.TotalGraphemes())
-	if extend {
-		// extend the selection end
-		b.selection.End = newPos
-	} else {
-		// move both start and end (cursor movement)
-		b.selection = state.Selection{Start: newPos, End: newPos}
-	}
-
-	return nil
-}
-
-// MoveSelectionToLineCol moves the selection to a specific line and column.
-func (b *Buffer) MoveSelectionToLineCol(line, col int, extend bool) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	if line < 0 || col < 0 || line >= len(b.lineCache) {
-		return ErrInvalidLineCol
-	}
-
-	lineStart := b.lineCache[line]
-	var lineEnd int
-	if line+1 < len(b.lineCache) {
-		lineEnd = b.lineCache[line+1] - 1 // -1 to exclude newline
-	} else {
-		lineEnd = b.document.TotalGraphemes()
-	}
-
-	actualCol := col
-	lineLen := lineEnd - lineStart
-	if actualCol > lineLen {
-		actualCol = lineLen
-	}
-
-	targetPos := lineStart + actualCol
-
-	if extend {
-		b.selection.End = targetPos
-	} else {
-		b.selection = state.Selection{Start: targetPos, End: targetPos}
-	}
-
-	return nil
-}
-
 // Selections returns the current selections.
 func (b *Buffer) Selection() state.Selection {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
+
 	return b.selection
 }
 
@@ -258,6 +217,7 @@ func (b *Buffer) Selection() state.Selection {
 func (b *Buffer) TotalGraphemes() int {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
+
 	return b.document.TotalGraphemes()
 }
 
@@ -270,12 +230,19 @@ func (b *Buffer) PositionToLineCol(pos int) (int, int, error) {
 		return 0, 0, ErrInvalidPosition
 	}
 
-	// Binary search in lineCache to find the line
-	line := 0
-	for i := len(b.lineCache) - 1; i >= 0; i-- {
-		if pos >= b.lineCache[i] {
-			line = i
-			break
+	b.lineCacheMu.RLock()
+	defer b.lineCacheMu.RUnlock()
+
+	// search lineCache to find the line
+	left, right := 0, len(b.lineCache)-1
+	var line int
+	for left <= right {
+		mid := (left + right) / 2
+		if b.lineCache[mid] <= pos {
+			line = mid
+			left = mid + 1
+		} else {
+			right = mid - 1
 		}
 	}
 
@@ -287,6 +254,9 @@ func (b *Buffer) PositionToLineCol(pos int) (int, int, error) {
 func (b *Buffer) GetLine(lineNum int) (string, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
+
+	b.lineCacheMu.RLock()
+	defer b.lineCacheMu.RUnlock()
 
 	if lineNum < 0 || lineNum >= len(b.lineCache) {
 		return "", ErrInvalidLineCol
@@ -300,13 +270,24 @@ func (b *Buffer) GetLine(lineNum int) (string, error) {
 		end = b.document.TotalGraphemes()
 	}
 
-	return b.document.GetTextRange(start, end)
+	return b.document.Substring(start, end)
+}
+
+func (b *Buffer) GetHighlights() ([]treesitter.Highlight, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	return b.highlighter.GetHighlights([]byte(b.document.String()))
 }
 
 // LineCount returns the total number of lines in the buffer
 func (b *Buffer) LineCount() int {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
+
+	b.lineCacheMu.RLock()
+	defer b.lineCacheMu.RUnlock()
+
 	return len(b.lineCache)
 }
 
@@ -314,6 +295,7 @@ func (b *Buffer) LineCount() int {
 func (b *Buffer) FileName() string {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
+
 	return b.FileUtil.GetFileName(b.filePath, true)
 }
 
@@ -321,6 +303,7 @@ func (b *Buffer) FileName() string {
 func (b *Buffer) FileType() string {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
+
 	return b.FileUtil.GetFileExt(b.filePath)
 }
 
@@ -328,18 +311,32 @@ func (b *Buffer) FileType() string {
 func (b *Buffer) FilePath() string {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
+
 	return b.filePath
 }
 
 // updateLineCache rebuilds the cache of line start positions.
 func (b *Buffer) updateLineCache() {
-	b.lineCache = make([]int, 0, 1000)
-	b.lineCache = append(b.lineCache, 0) // First line always starts at 0
+	b.lineCacheMu.Lock()
+	defer b.lineCacheMu.Unlock()
 
-	doc := b.document.ToString()
-	for i, r := range doc {
-		if r == '\n' {
-			b.lineCache = append(b.lineCache, i+1)
+	b.lineCache = []int{0}
+	iter := b.document.NewIterator()
+	var pos int
+	for grapheme, ok := iter.Next(); ok; grapheme, ok = iter.Next() {
+		if grapheme == "\n" {
+			b.lineCache = append(b.lineCache, pos+1)
 		}
+		pos++
 	}
+}
+
+// countGraphemes counts the grapheme clusters in a string.
+func countGraphemes(s string) int {
+	gr := uniseg.NewGraphemes(s)
+	count := 0
+	for gr.Next() {
+		count++
+	}
+	return count
 }

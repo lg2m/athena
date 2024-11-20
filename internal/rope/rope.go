@@ -2,6 +2,7 @@ package rope
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 
@@ -12,8 +13,8 @@ import (
 const MaxLeafSize = 256
 
 var (
-	ErrInvalidRange = errors.New("invalid range")
-	ErrOutOfBounds  = errors.New("index out of bounds")
+	ErrInvalidRange = errors.New("rope: invalid range")
+	ErrOutOfBounds  = errors.New("rope: index out of bounds")
 )
 
 // RopeNode represents a node in the Rope data structure.
@@ -43,7 +44,7 @@ func (r *Rope) Insert(index int, s string) error {
 	defer r.mu.Unlock()
 
 	if index < 0 || index > r.root.totalGraphemes() {
-		return ErrOutOfBounds
+		return fmt.Errorf("%w: index: %d", ErrOutOfBounds, index)
 	}
 
 	// Split the rope at the position
@@ -51,40 +52,87 @@ func (r *Rope) Insert(index int, s string) error {
 	insertRope := NewRope(s)
 	newLeft := concatenateNodes(left, insertRope.root)
 	r.root = concatenateNodes(newLeft, right)
+	r.root = rebalance(r.root)
 	return nil
 }
 
 // Delete removes grapheme clusters from start to end (exclusive).
 func (r *Rope) Delete(start, end int) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	if start < 0 || end > r.root.totalGraphemes() || start > end {
-		return ErrInvalidRange
+		return fmt.Errorf("%w: start %d, end %d", ErrInvalidRange, start, end)
 	}
+
 	left, temp := r.root.Split(start)
 	_, right := temp.Split(end - start)
 	r.root = concatenateNodes(left, right)
+	r.root = rebalance(r.root)
 	return nil
 }
 
-// ToString returns the string representation of the Rope.
-func (r *Rope) ToString() string {
+// Replace replaces text in the given range with the provided string.
+func (r *Rope) Replace(start, end int, s string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	total := r.root.totalGraphemes()
+	if start < 0 || end > total || start > end {
+		return fmt.Errorf("%w: start %d, end %d", ErrInvalidRange, start, end)
+	}
+
+	left, temp := r.root.Split(start)
+	_, right := temp.Split(end - start)
+	insertRope := NewRope(s)
+	newRoot := concatenateNodes(left, insertRope.root)
+	r.root = concatenateNodes(newRoot, right)
+	r.root = rebalance(r.root)
+	return nil
+}
+
+// String implements the fmt.Stringer interface.
+func (r *Rope) String() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	var sb strings.Builder
 	r.root.writeToString(&sb)
 	return sb.String()
 }
 
-// GetTextRange retrieves text from start to end grapheme indices (exclusive).
-func (r *Rope) GetTextRange(start, end int) (string, error) {
+// Substring retrieves text from start to end grapheme indices (exclusive).
+func (r *Rope) Substring(start, end int) (string, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	if start < 0 || end > r.root.totalGraphemes() || start > end {
-		return "", errors.New("invalid text range")
+		return "", fmt.Errorf("%w: start %d, end %d", ErrInvalidRange, start, end)
 	}
 	var sb strings.Builder
 	r.root.appendTextRange(&sb, start, end)
 	return sb.String(), nil
 }
 
+// GraphemeAt returns the grapheme cluster at the specified index.
+func (r *Rope) GraphemeAt(index int) (string, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if index < 0 || index >= r.root.totalGraphemes() {
+		return "", fmt.Errorf("%w: index %d", ErrOutOfBounds, index)
+	}
+	return r.root.graphemeAt(index)
+}
+
 func (r *Rope) TotalGraphemes() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	return r.root.totalGraphemes()
 }
+
+// Internal Methods
 
 // Split splits the RopeNode at the given grapheme index.
 func (n *RopeNode) Split(index int) (*RopeNode, *RopeNode) {
@@ -93,6 +141,13 @@ func (n *RopeNode) Split(index int) (*RopeNode, *RopeNode) {
 	}
 	if n.left == nil && n.right == nil {
 		// Leaf node: split the data string
+		if index <= 0 {
+			return nil, n
+		}
+		if index >= n.weight {
+			return n, nil
+		}
+
 		gr := uniseg.NewGraphemes(n.data)
 		var leftData, rightData strings.Builder
 		count := 0
@@ -106,11 +161,11 @@ func (n *RopeNode) Split(index int) (*RopeNode, *RopeNode) {
 		}
 		leftNode := &RopeNode{
 			data:   leftData.String(),
-			weight: CountGraphemes(leftData.String()),
+			weight: index,
 		}
 		rightNode := &RopeNode{
 			data:   rightData.String(),
-			weight: CountGraphemes(rightData.String()),
+			weight: n.weight - index,
 		}
 		return leftNode, rightNode
 	}
@@ -126,7 +181,7 @@ func (n *RopeNode) Split(index int) (*RopeNode, *RopeNode) {
 	return newLeft, rightRight
 }
 
-// writeToString
+// writeToString writes the node's data to a StringBuilder.
 func (n *RopeNode) writeToString(sb *strings.Builder) {
 	if n == nil {
 		return
@@ -172,6 +227,28 @@ func (n *RopeNode) appendTextRange(sb *strings.Builder, start, end int) {
 	}
 }
 
+// graphemeAt returns the grapheme at the specified index.
+func (n *RopeNode) graphemeAt(index int) (string, error) {
+	if n == nil {
+		return "", fmt.Errorf("%w: index %d", ErrOutOfBounds, index)
+	}
+	if n.left == nil && n.right == nil {
+		gr := uniseg.NewGraphemes(n.data)
+		count := 0
+		for gr.Next() {
+			if count == index {
+				return gr.Str(), nil
+			}
+			count++
+		}
+		return "", fmt.Errorf("%w: index %d", ErrOutOfBounds, index)
+	}
+	if index < n.weight {
+		return n.left.graphemeAt(index)
+	}
+	return n.right.graphemeAt(index - n.weight)
+}
+
 // totalGraphemes returns the total number of grapheme clusters in the node.
 func (n *RopeNode) totalGraphemes() int {
 	if n == nil {
@@ -183,15 +260,7 @@ func (n *RopeNode) totalGraphemes() int {
 	return n.weight + n.right.totalGraphemes()
 }
 
-// CountGraphemes counts the number of grapheme clusters in a string.
-func CountGraphemes(s string) int {
-	gr := uniseg.NewGraphemes(s)
-	count := 0
-	for gr.Next() {
-		count++
-	}
-	return count
-}
+// Utility helpers
 
 // splitIntoLeaves splits the input string into chunks of up to maxSize grapheme clusters.
 func splitIntoLeaves(s string, maxSize int) []*RopeNode {
@@ -253,4 +322,25 @@ func concatenateNodes(left, right *RopeNode) *RopeNode {
 		right:  right,
 		weight: left.totalGraphemes(),
 	}
+}
+
+// Rebalancing functions
+
+// rebalance rebalances the rope to maintain optimal performance.
+func rebalance(n *RopeNode) *RopeNode {
+	nodes := flatten(n)
+	return buildBalancedTree(nodes)
+}
+
+// flatten flattens the rope into a list of leaf nodes.
+func flatten(n *RopeNode) []*RopeNode {
+	if n == nil {
+		return nil
+	}
+	if n.left == nil && n.right == nil {
+		return []*RopeNode{n}
+	}
+	leftLeaves := flatten(n.left)
+	rightLeaves := flatten(n.right)
+	return append(leftLeaves, rightLeaves...)
 }
