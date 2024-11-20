@@ -25,13 +25,15 @@ type Highlighter struct {
 	parser   *sitter.Parser
 	language LanguageProvider
 	registry *Registry
-
-	query  *sitter.Query
-	styles StyleMap
 }
 
-// NewHighlighter creates a new syntax highlighter for the specified language.
-func NewHighlighter(registry *Registry, languageName string) (*Highlighter, error) {
+// NewHighlighter creates a new syntax highlighter based on the detected language.
+func NewHighlighter(registry *Registry, filename string) (*Highlighter, error) {
+	languageName, err := registry.DetectLanguage(filename)
+	if err != nil {
+		return nil, err
+	}
+
 	lang, exists := registry.languages[languageName]
 	if !exists {
 		return nil, fmt.Errorf("hl: unsupported langauge: %s", languageName)

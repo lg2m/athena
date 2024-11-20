@@ -10,6 +10,7 @@ import (
 
 	"github.com/lg2m/athena/internal/editor/state"
 	"github.com/lg2m/athena/internal/editor/treesitter"
+	"github.com/lg2m/athena/internal/editor/treesitter/languages"
 	"github.com/lg2m/athena/internal/rope"
 	"github.com/lg2m/athena/internal/util"
 	"github.com/rivo/uniseg"
@@ -60,13 +61,14 @@ func NewBuffer(filePath string) (*Buffer, error) {
 	}
 
 	// Setup registry
-	registry := treesitter.NewRegistry(treesitter.DefaultStyles)
+	registry := treesitter.NewRegistry()
 
 	// Register langauges
-	registry.RegisterLanguage(&treesitter.RustLanguage{})
+	_ = registry.RegisterLanguage(&languages.RustProvider{})
+	_ = registry.RegisterLanguage(&languages.GoProvider{})
 
 	// Create highlighter
-	highlighter, err := treesitter.NewHighlighter(registry, "rust")
+	highlighter, err := treesitter.NewHighlighter(registry, filepath.Base(filePath))
 	if err != nil {
 		file.Close()
 		return nil, err
